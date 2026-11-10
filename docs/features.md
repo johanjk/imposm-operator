@@ -22,9 +22,14 @@
   committed changes are sent, at least once; `0/0/0` is sent when the changes
   are unknown (e.g. a new import was deployed).
 - Mappings in imposm's format, referenced from ConfigMaps and split into
-  parts. The runner's imposm adds a `jsonb_tags` column type (all tags, or
-  those in `args.include`, as a JSONB object; no hstore extension needed),
-  see [`containers/patches/`](../containers/patches/).
+  parts. Validated before any import: unknown table and column types, a
+  filter on a key imposm would not load (imposm keeps only the keys the
+  mapping names unless `tags.load_all` is set, so such a filter never
+  matches) is `MappingValid=False`; a `hstore_tags`/`jsonb_tags` column
+  without `tags.load_all` (it holds only the mapped keys) a warning in the
+  condition's message. The runner's imposm adds a `jsonb_tags` column type
+  (all tags, or those in `args.include`, as a JSONB object; no hstore
+  extension needed), see [`containers/patches/`](../containers/patches/).
 - Re-imports without growing lag: while a new import is built (a mapping,
   SRID, prefix, limitTo or schema change, or the `reimport` action),
   production keeps receiving diffs with its own frozen configuration and

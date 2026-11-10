@@ -119,7 +119,7 @@ func (r *run) workspaceFor(imp *state.Import) (*workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	if w.mapping, err = mapping.Merge([]mapping.Part{{Name: "mapping.yaml", Data: m}}); err != nil {
+	if w.mapping, err = mapping.Frozen(m); err != nil {
 		return nil, fmt.Errorf("frozen mapping of import %d: %w", imp.ID, err)
 	}
 	if w.cfg.LimitToBuffer != "" || fileExists(w.path("limitto.geojson")) {

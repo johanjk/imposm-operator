@@ -110,7 +110,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// Mapping ConfigMaps are watched: no need to requeue.
 		return reconcile.Result{}, r.writeStatus(ctx, s)
 	}
-	setCond(st, v1.ConditionMappingValid, true, "Valid", fmt.Sprintf("%d tables", len(merged.Tables)), s.Generation)
+	if len(merged.Warnings) > 0 {
+		setCond(st, v1.ConditionMappingValid, true, "ValidWithWarnings",
+			fmt.Sprintf("%d tables; %s", len(merged.Tables), strings.Join(merged.Warnings, "; ")), s.Generation)
+	} else {
+		setCond(st, v1.ConditionMappingValid, true, "Valid", fmt.Sprintf("%d tables", len(merged.Tables)), s.Generation)
+	}
 	st.MappingHash = merged.Hash
 
 	limit, err := r.limitTo(ctx, s)

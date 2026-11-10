@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -40,7 +41,9 @@ type Result struct {
 	GeneralizedTables []string
 	// GeneralizedTolerances maps generalized table name to its tolerance.
 	GeneralizedTolerances map[string]float64
-	doc                   map[string]any
+	// Warnings are valid but probably unintended settings.
+	Warnings []string
+	doc      map[string]any
 }
 
 // TagMatcher reports whether an object with these tags matches a table's
@@ -59,15 +62,7 @@ func (r *Result) PointMatchers() map[string]TagMatcher {
 		if _, hasFilters := t["filters"]; hasFilters {
 			continue
 		}
-		var kvs []map[string]any
-		if m := asMap(t["mapping"]); m != nil {
-			kvs = append(kvs, m)
-		}
-		for _, sub := range asMap(t["mappings"]) {
-			if m := asMap(asMap(sub)["mapping"]); m != nil {
-				kvs = append(kvs, m)
-			}
-		}
+		kvs := tableMappings(t, "points")
 		if len(kvs) == 0 {
 			continue
 		}
@@ -99,9 +94,18 @@ const MaxPartSize = 4 << 20
 // uniqueKeys are sections whose entries must be defined in exactly one part.
 var uniqueKeys = map[string]bool{"tables": true, "generalized_tables": true}
 
-// Merge merges parts in order. Order only affects error messages: the result
-// is independent of it.
-func Merge(parts []Part) (*Result, error) {
+// Merge merges parts in order and validates the result. Order only affects
+// error messages: the result is independent of it.
+func Merge(parts []Part) (*Result, error) { return mergeParts(parts, true) }
+
+// Frozen loads a mapping frozen with an import (mapping.yaml): checked for
+// the structure imposm needs only. Checks added for new mappings must not
+// stop an import that already serves production.
+func Frozen(data []byte) (*Result, error) {
+	return mergeParts([]Part{{Name: "mapping.yaml", Data: data}}, false)
+}
+
+func mergeParts(parts []Part, strict bool) (*Result, error) {
 	if len(parts) == 0 {
 		return nil, errors.New("mapping: no parts")
 	}
@@ -125,6 +129,11 @@ func Merge(parts []Part) (*Result, error) {
 	if err := Validate(merged); err != nil {
 		return nil, err
 	}
+	if strict {
+		if errs := validateFilterKeys(merged); len(errs) > 0 {
+			return nil, fmt.Errorf("mapping: %w", errors.Join(errs...))
+		}
+	}
 	out, err := yaml.Marshal(merged) // map keys are sorted: canonical
 	if err != nil {
 		return nil, fmt.Errorf("mapping: %w", err)
@@ -140,7 +149,8 @@ func Merge(parts []Part) (*Result, error) {
 		gtol[name], _ = asMap(g)["tolerance"].(float64)
 	}
 	return &Result{YAML: out, Hash: hex.EncodeToString(sum[:]), Tables: keys(tm), TableTypes: types,
-		GeneralizedTables: keys(asMap(merged["generalized_tables"])), GeneralizedTolerances: gtol, doc: merged}, nil
+		GeneralizedTables: keys(asMap(merged["generalized_tables"])), GeneralizedTolerances: gtol,
+		Warnings: warnings(merged), doc: merged}, nil
 }
 
 func mergeInto(dst, src map[string]any, path, part string, origin map[string]string) error {
@@ -275,7 +285,7 @@ func Validate(doc map[string]any) error {
 		if !tableTypes[typ] {
 			errs = append(errs, fmt.Errorf("table %q: unknown type %q", name, typ))
 		}
-		cols, _ := t["columns"].([]any)
+		cols := asList(t["columns"])
 		if len(cols) == 0 {
 			errs = append(errs, fmt.Errorf("table %q: no columns", name))
 		}
@@ -343,12 +353,231 @@ func asMap(v any) map[string]any {
 	return m
 }
 
+func asList(v any) []any {
+	l, _ := v.([]any)
+	return l
+}
+
+// strs are the strings of a YAML list (other items skipped).
+func strs(v any) []string {
+	var out []string
+	for _, e := range asList(v) {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func keys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// tableMappings are the tag mappings that put objects of one geometry in
+// table t: mapping, each of mappings, and the type_mappings section
+// ("points", "linestrings" or "polygons"; "" for none).
+func tableMappings(t map[string]any, section string) []map[string]any {
+	var out []map[string]any
+	if m := asMap(t["mapping"]); m != nil {
+		out = append(out, m)
+	}
+	for _, name := range keys(asMap(t["mappings"])) {
+		if m := asMap(asMap(asMap(t["mappings"])[name])["mapping"]); m != nil {
+			out = append(out, m)
+		}
+	}
+	if m := asMap(asMap(t["type_mappings"])[section]); section != "" && m != nil {
+		out = append(out, m)
+	}
+	return out
+}
+
+// The OSM element kinds imposm reads tags for, each with its own tag filter.
+const (
+	nodes = iota
+	ways
+	relations
+	kinds
+)
+
+// tableKinds are the element kinds that feed a table, per its type (for
+// geometry tables: per type_mappings section).
+func tableKinds(typ string, t map[string]any) []int {
+	switch typ {
+	case "point":
+		return []int{nodes}
+	case "linestring":
+		return []int{ways}
+	case "polygon":
+		return []int{ways, relations} // multipolygon relations
+	case "relation", "relation_member":
+		return []int{relations}
+	case "geometry":
+		tm := asMap(t["type_mappings"])
+		var out []int
+		if _, ok := tm["points"]; ok {
+			out = append(out, nodes)
+		}
+		if _, ok := tm["linestrings"]; ok {
+			out = append(out, ways)
+		}
+		if _, ok := tm["polygons"]; ok {
+			out = append(out, ways, relations)
+		}
+		return out
+	}
+	return nil
+}
+
+// loadedKeys is what imposm keeps of each element kind's tags
+// (mapping/filter.go): all but tags.exclude with tags.load_all; otherwise
+// the keys of the mappings of the tables that kind feeds, the column and
+// exclude_tags keys of those tables and of relation_member tables (members
+// are nodes and ways), tags.include, "area", and "type" for relations. Keys
+// only named in filters are dropped before the filters run.
+type loadedKeys struct {
+	all     bool
+	exclude []string
+	keys    [kinds]map[string]bool
+}
+
+func newLoadedKeys(doc map[string]any) loadedKeys {
+	tags := asMap(doc["tags"])
+	l := loadedKeys{exclude: strs(tags["exclude"])}
+	l.all, _ = tags["load_all"].(bool)
+	for k := range l.keys {
+		l.keys[k] = map[string]bool{"area": true}
+		for _, key := range strs(tags["include"]) {
+			l.keys[k][key] = true
+		}
+	}
+	l.keys[relations]["type"] = true
+	tables := asMap(doc["tables"])
+	for _, name := range keys(tables) {
+		t := asMap(tables[name])
+		typ, _ := t["type"].(string)
+		feeds := tableKinds(typ, t)
+		extra := feeds
+		if typ == "relation_member" {
+			extra = []int{nodes, ways, relations}
+		}
+		for _, k := range feeds {
+			section := map[int]string{nodes: "points", ways: "linestrings", relations: "polygons"}[k]
+			for _, m := range tableMappings(t, section) {
+				for key := range m {
+					l.keys[k][key] = true
+				}
+			}
+		}
+		for _, k := range extra {
+			for _, c := range asList(t["columns"]) {
+				cm := asMap(c)
+				if key, ok := cm["key"].(string); ok && key != "" {
+					l.keys[k][key] = true
+				}
+				for _, key := range strs(cm["keys"]) {
+					l.keys[k][key] = true
+				}
+			}
+			for _, kv := range asList(asMap(t["filters"])["exclude_tags"]) {
+				if pair := strs(kv); len(pair) > 0 {
+					l.keys[k][pair[0]] = true
+				}
+			}
+		}
+	}
+	return l
+}
+
+// has reports whether imposm loads key k for element kind kind.
+func (l loadedKeys) has(kind int, k string) bool {
+	if l.all {
+		for _, e := range l.exclude {
+			if e == k || strings.HasSuffix(e, "*") && strings.HasPrefix(k, strings.TrimSuffix(e, "*")) {
+				return false
+			}
+		}
+		return true
+	}
+	return l.keys[kind][k]
+}
+
+var kindNames = [kinds]string{"nodes", "ways", "relations"}
+
+// validateFilterKeys refuses filters on keys imposm does not load for an
+// element kind the table reads: such a require never matches (no rows from
+// those elements), such a reject never rejects.
+func validateFilterKeys(doc map[string]any) []error {
+	l := newLoadedKeys(doc)
+	var errs []error
+	tables := asMap(doc["tables"])
+	for _, name := range keys(tables) {
+		t := asMap(tables[name])
+		typ, _ := t["type"].(string)
+		f := asMap(t["filters"])
+		for _, kind := range []string{"require", "reject", "require_regexp", "reject_regexp"} {
+			for _, k := range keys(asMap(f[kind])) {
+				var missing []string
+				for _, ek := range tableKinds(typ, t) {
+					if !l.has(ek, k) && !slices.Contains(missing, kindNames[ek]) {
+						missing = append(missing, kindNames[ek])
+					}
+				}
+				if len(missing) > 0 {
+					errs = append(errs, fmt.Errorf("table %q: filters.%s on %q has no effect on %s: imposm does not load that key "+
+						"(add a column with key %q, list it in tags.include, or set tags.load_all)",
+						name, kind, k, strings.Join(missing, " and "), k))
+				}
+			}
+		}
+	}
+	return errs
+}
+
+// warnings lists valid but probably unintended settings: hstore_tags and
+// jsonb_tags columns without tags.load_all hold only the loaded keys (for
+// args.include: those of the listed keys that are loaded).
+func warnings(doc map[string]any) []string {
+	l := newLoadedKeys(doc)
+	if l.all {
+		return nil
+	}
+	var out []string
+	tables := asMap(doc["tables"])
+	for _, name := range keys(tables) {
+		t := asMap(tables[name])
+		typ, _ := t["type"].(string)
+		for _, c := range asList(t["columns"]) {
+			cm := asMap(c)
+			ctyp, _ := cm["type"].(string)
+			if ctyp != "hstore_tags" && ctyp != "jsonb_tags" {
+				continue
+			}
+			col, _ := cm["name"].(string)
+			include, hasInclude := asMap(cm["args"])["include"]
+			if !hasInclude {
+				out = append(out, fmt.Sprintf("table %q column %q (%s) holds only the keys the mapping names, not all tags: set tags.load_all", name, col, ctyp))
+				continue
+			}
+			var unloaded []string
+			for _, k := range strs(include) {
+				for _, ek := range tableKinds(typ, t) {
+					if !l.has(ek, k) && !slices.Contains(unloaded, k) {
+						unloaded = append(unloaded, k)
+					}
+				}
+			}
+			if len(unloaded) > 0 {
+				out = append(out, fmt.Sprintf("table %q column %q (%s) includes keys imposm does not load: %s (list them in tags.include)",
+					name, col, ctyp, strings.Join(unloaded, ", ")))
+			}
+		}
+	}
 	return out
 }
 

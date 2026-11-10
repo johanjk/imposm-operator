@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"strings"
@@ -139,4 +140,114 @@ func diffHint(a, b []byte) string {
 		}
 	}
 	return "length differs"
+}
+
+// imposm drops keys that are only named in filters: such filters are
+// refused, unless the key is loaded by a column, tags.include or load_all.
+func TestFilterKeysLoaded(t *testing.T) {
+	const base = `
+tables:
+  walls:
+    type: linestring
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}%s]
+    filters: {require: {wall: [noise_barrier]}}
+    mapping: {barrier: [wall]}
+`
+	for name, tc := range map[string]struct {
+		column, extra string
+		err           string
+	}{
+		"filter only":          {"", "", `filters.require on "wall" has no effect`},
+		"column":               {", {name: wall, key: wall, type: string}", "", ""},
+		"tags.include":         {"", "tags: {include: [wall]}\n", ""},
+		"load_all":             {"", "tags: {load_all: true}\n", ""},
+		"load_all, excluded":   {"", "tags: {load_all: true, exclude: [wall]}\n", `filters.require on "wall"`},
+		"load_all, wildcarded": {"", "tags: {load_all: true, exclude: [\"wa*\"]}\n", `filters.require on "wall"`},
+	} {
+		_, err := Merge([]Part{{Name: "a", Data: []byte(fmt.Sprintf(base, tc.column) + tc.extra)}})
+		if tc.err == "" && err != nil || tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)) {
+			t.Errorf("%s: got %v, want %q", name, err, tc.err)
+		}
+	}
+}
+
+func TestTagsColumnWarning(t *testing.T) {
+	const part = `
+tables:
+  tracks:
+    type: linestring
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}, {name: tags, type: jsonb_tags}]
+    mapping: {railway: [rail]}
+`
+	r, err := Merge([]Part{{Name: "a", Data: []byte(part)}})
+	if err != nil || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "tags.load_all") {
+		t.Fatalf("%v %v", err, r.Warnings)
+	}
+	r, err = Merge([]Part{{Name: "a", Data: []byte(part + "tags: {load_all: true}\n")}})
+	if err != nil || len(r.Warnings) != 0 {
+		t.Fatalf("%v %v", err, r.Warnings)
+	}
+}
+
+// imposm loads tags per element kind: a key that is only a linestring
+// column is not loaded for nodes, so a point table cannot filter on it.
+func TestFilterKeysPerElementKind(t *testing.T) {
+	const part = `
+tables:
+  stations:
+    type: point
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}]
+    filters: {require: {operator: [__any__]}}
+    mapping: {railway: [station]}
+  tracks:
+    type: linestring
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}, {name: operator, key: operator, type: string}]
+    mapping: {railway: [rail]}
+`
+	_, err := Merge([]Part{{Name: "a", Data: []byte(part)}})
+	if err == nil || !strings.Contains(err.Error(), `table "stations": filters.require on "operator" has no effect on nodes`) {
+		t.Fatalf("got %v", err)
+	}
+	// a relation_member column is loaded for nodes and ways too (members)
+	ok := strings.Replace(part, "  tracks:\n    type: linestring", "  tracks:\n    type: relation_member\n    relation_types: [route]", 1)
+	if _, err := Merge([]Part{{Name: "a", Data: []byte(ok)}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A mapping frozen with an import is checked for structure only: a check
+// added later must not stop an import that serves production.
+func TestFrozenSkipsNewChecks(t *testing.T) {
+	const part = `
+tables:
+  walls:
+    type: linestring
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}]
+    filters: {require: {wall: [noise_barrier]}}
+    mapping: {barrier: [wall]}
+`
+	if _, err := Merge([]Part{{Name: "a", Data: []byte(part)}}); err == nil {
+		t.Fatal("Merge accepted a filter on an unloaded key")
+	}
+	r, err := Frozen([]byte(part))
+	if err != nil || len(r.Tables) != 1 {
+		t.Fatalf("Frozen: %v", err)
+	}
+	if _, err := Frozen([]byte("tables: {x: {type: nope}}")); err == nil {
+		t.Fatal("Frozen accepted a broken structure")
+	}
+}
+
+func TestTagsIncludeWarning(t *testing.T) {
+	const part = `
+tables:
+  tracks:
+    type: linestring
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}, {name: tags, type: jsonb_tags, args: {include: [name, wikidata]}}, {name: name, key: name, type: string}]
+    mapping: {railway: [rail]}
+`
+	r, err := Merge([]Part{{Name: "a", Data: []byte(part)}})
+	if err != nil || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "does not load: wikidata") {
+		t.Fatalf("%v %v", err, r.Warnings)
+	}
 }
