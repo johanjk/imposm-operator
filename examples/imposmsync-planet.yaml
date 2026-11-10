@@ -1,0 +1,74 @@
+# The whole planet, kept current with hourly diffs.
+#
+# kubectl apply -f examples/imposmsync-planet.yaml
+# (mapping ConfigMap and database as for imposmsync.yaml)
+#
+# Read this before running it. The numbers are a starting point, not a measurement:
+# - the snapshot is ~96 GB; imposm's cache (with -diff, needed for updates) is
+#   several times that; the database several hundred GB with the example
+#   mapping. The import takes many hours and wants a lot of RAM.
+# - a mapping change re-imports while production keeps receiving diffs
+#   (deploy.syncDuringReimport: auto), which needs room for a second imposm
+#   cache meanwhile; without it production pauses until the new import is
+#   deployed, a day or more for the planet. Size storage for two caches.
+# - storage MUST support reflinks (XFS, btrfs, ZFS): before each diff chunk
+#   the cache is checkpointed, and copying a planet cache is not an option.
+#   Without a checkpoint an interrupted chunk means a full re-import
+#   (production keeps serving meanwhile, but that is a day of work).
+# - planet.openstreetmap.org redirects to S3 and is fine to download from
+#   directly (mirrors are no longer needed to save OSM bandwidth). To take the
+#   snapshot from a mirror closer to the cluster, keep the diffs on the origin,
+#   which has no mirror lag:
+#       baseURL: https://ftp.fau.de/osm-planet/
+#       replicationBaseURL: https://planet.openstreetmap.org/
+#   Mirrors: https://wiki.openstreetmap.org/wiki/Planet.osm#Planet.osm_mirrors
+# - the planet header has a timestamp but no replication sequence; the
+#   starting sequence is found by searching the replication state files.
+# - frequency: hour (~170 diffs to catch up a week-old snapshot). For minutely
+#   diffs (~10000 to catch up first) set:
+#       updateFrequency: minute
+#       schedule: "*/5 * * * *"   # every 5 minutes
+#       maxDiffsPerRun: 2000
+#       diffChunkSize: 60
+#   Changing the frequency later re-imports: it changes the replication stream.
+apiVersion: imposm.johanjk.github.io/v1alpha1
+kind: ImposmSync
+metadata:
+  name: planet
+spec:
+  source:
+    baseURL: https://planet.openstreetmap.org/
+    pbfPath: pbf/planet-latest.osm.pbf
+    replicationPath: replication/{frequency}/
+    updateFrequency: hour
+  database:
+    host: osm-rw
+    database: osm
+    user: osm
+    sslMode: require
+    pgpassSecretRef:
+      name: osm-app
+      key: pgpass
+  mapping:
+    sources:
+      - configMapRef:
+          name: osm-mapping
+  imposm:
+    srid: 3857
+    expireTiles:
+      zoom: 14
+  schedule: "17 * * * *"   # every hour at minute 17
+  maxDiffsPerRun: 200
+  storage:
+    size: 1Ti
+    storageClassName: xfs-ssd        # any reflink-capable, fast class
+  runner:
+    resources:
+      requests:
+        cpu: "8"
+        memory: 48Gi
+      limits:
+        memory: 64Gi
+    # a planet import phase can outlast the 24h default; phases resume
+    # across runs, but a single phase must fit in one run
+    activeDeadline: 72h

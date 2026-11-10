@@ -1,0 +1,836 @@
+{
+  "$id": "https://github.com/johanjk/imposm-operator/config/schema/imposmsyncspec.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "ImposmSyncSpec describes one OSM database kept in sync by imposm.",
+  "properties": {
+    "database": {
+      "description": "DatabaseSpec is the PostGIS target.",
+      "properties": {
+        "database": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "host": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "passwordSecretRef": {
+          "description": "PasswordSecretRef points at a key holding the plain password.",
+          "properties": {
+            "key": {
+              "description": "The key of the secret to select from.  Must be a valid secret key.",
+              "type": "string"
+            },
+            "name": {
+              "default": "",
+              "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+              "type": "string"
+            },
+            "optional": {
+              "description": "Specify whether the Secret or its key must be defined",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object",
+          "x-kubernetes-map-type": "atomic"
+        },
+        "pgpassSecretRef": {
+          "description": "PgpassSecretRef points at a key holding a libpq password file\n(CloudNativePG's \u003ccluster\u003e-app secret has one under \"pgpass\").",
+          "properties": {
+            "key": {
+              "description": "The key of the secret to select from.  Must be a valid secret key.",
+              "type": "string"
+            },
+            "name": {
+              "default": "",
+              "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+              "type": "string"
+            },
+            "optional": {
+              "description": "Specify whether the Secret or its key must be defined",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object",
+          "x-kubernetes-map-type": "atomic"
+        },
+        "port": {
+          "default": 5432,
+          "format": "int32",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "schemas": {
+          "description": "SchemasSpec names the imposm schemas and the operator's bookkeeping schema.",
+          "properties": {
+            "backup": {
+              "default": "backup",
+              "type": "string"
+            },
+            "import": {
+              "default": "import",
+              "type": "string"
+            },
+            "production": {
+              "default": "public",
+              "type": "string"
+            },
+            "state": {
+              "default": "imposm_operator",
+              "description": "State is where the operator records imports and applied diffs.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "sslMode": {
+          "default": "require",
+          "enum": [
+            "disable",
+            "require",
+            "verify-ca",
+            "verify-full"
+          ],
+          "type": "string"
+        },
+        "user": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "database",
+        "host",
+        "user"
+      ],
+      "type": "object"
+    },
+    "deletionPolicy": {
+      "default": "Retain",
+      "description": "DeletionPolicy decides what happens to the cache volume when the sync is\ndeleted. The database is never touched.",
+      "enum": [
+        "Retain",
+        "Delete"
+      ],
+      "type": "string"
+    },
+    "deploy": {
+      "description": "DeploySpec controls promotion from the import to the production schema.",
+      "properties": {
+        "auto": {
+          "default": true,
+          "description": "Auto deploys a new import once it has caught up with the upstream.",
+          "type": "boolean"
+        },
+        "keepBackup": {
+          "description": "KeepBackup keeps the previous production data in the backup schema.",
+          "type": "boolean"
+        },
+        "syncDuringReimport": {
+          "default": "auto",
+          "description": "SyncDuringReimport keeps production receiving diffs while a new import\nis built (after a mapping, SRID, prefix, limitTo or schema change, or the\nreimport action), so its lag does not grow until the deploy. Each import\nkeeps its own imposm cache meanwhile. auto: when the volume has room for\na second cache (about 1.2 times the current one); always: regardless;\nnever: production pauses until the new import is deployed.",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "diffChunkSize": {
+      "default": 10,
+      "description": "DiffChunkSize is how many diffs are handed to one `imposm diff` call.",
+      "format": "int32",
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "imposm": {
+      "description": "ImposmSpec are settings forwarded to imposm.",
+      "properties": {
+        "cacheCheckpointLimit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "4Gi",
+          "description": "CacheCheckpointLimit: imposm's cache and the database are not updated\natomically, so before each diff chunk the cache is checkpointed and an\ninterrupted chunk is rolled back. Reflink clones (XFS, btrfs, ZFS) are\nalways used when available; otherwise the cache is copied if it is\nsmaller than this limit. Without a checkpoint an interrupted chunk\ntriggers a re-import (production keeps serving). \"0\" disables copying.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
+        },
+        "expireTiles": {
+          "description": "ExpireTilesSpec enables imposm expire-tile lists (one \"z/x/y\" per line)\nfor tile cache invalidation: imposm's standard files on a volume, and/or a\nRedis stream in zaptiles' format.\nTiles of a diff chunk are released only after the chunk committed and are\ndelivered at least once to every configured sink. When the changed tiles\ncannot be known (a replacement import is deployed, or a chunk's commit was\nonly proven afterwards) the single tile 0/0/0 is sent, which invalidates\neverything. Without files or redis, files are kept in the data volume\nunder expiretiles/.",
+          "properties": {
+            "files": {
+              "description": "Files writes imposm's \u003cYYYYMMDD\u003e/\u003ctime\u003e.tiles files to a shared volume.",
+              "properties": {
+                "subPath": {
+                  "description": "SubPath inside the volume.",
+                  "type": "string"
+                },
+                "volume": {
+                  "description": "Volume holding the files; typically an RWX persistentVolumeClaim.",
+                  "properties": {
+                    "csi": {
+                      "description": "CSI is an inline CSI volume (the driver must support ephemeral inline use).",
+                      "properties": {
+                        "driver": {
+                          "description": "driver is the name of the CSI driver that handles this volume.\nConsult with your admin for the correct name as registered in the cluster.",
+                          "type": "string"
+                        },
+                        "fsType": {
+                          "description": "fsType to mount. Ex. \"ext4\", \"xfs\", \"ntfs\".\nIf not provided, the empty value is passed to the associated CSI driver\nwhich will determine the default filesystem to apply.",
+                          "type": "string"
+                        },
+                        "nodePublishSecretRef": {
+                          "description": "nodePublishSecretRef is a reference to the secret object containing\nsensitive information to pass to the CSI driver to complete the CSI\nNodePublishVolume and NodeUnpublishVolume calls.\nThis field is optional, and  may be empty if no secret is required. If the\nsecret object contains more than one secret, all secret references are passed.",
+                          "properties": {
+                            "name": {
+                              "default": "",
+                              "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                              "type": "string"
+                            }
+                          },
+                          "type": "object",
+                          "x-kubernetes-map-type": "atomic"
+                        },
+                        "readOnly": {
+                          "description": "readOnly specifies a read-only configuration for the volume.\nDefaults to false (read/write).",
+                          "type": "boolean"
+                        },
+                        "volumeAttributes": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "volumeAttributes stores driver-specific properties that are passed to the CSI\ndriver. Consult your driver's documentation for supported values.",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "driver"
+                      ],
+                      "type": "object"
+                    },
+                    "nfs": {
+                      "description": "Represents an NFS mount that lasts the lifetime of a pod.\nNFS volumes do not support ownership management or SELinux relabeling.",
+                      "properties": {
+                        "path": {
+                          "description": "path that is exported by the NFS server.\nMore info: https://kubernetes.io/docs/concepts/storage/volumes#nfs",
+                          "type": "string"
+                        },
+                        "readOnly": {
+                          "description": "readOnly here will force the NFS export to be mounted with read-only permissions.\nDefaults to false.\nMore info: https://kubernetes.io/docs/concepts/storage/volumes#nfs",
+                          "type": "boolean"
+                        },
+                        "server": {
+                          "description": "server is the hostname or IP address of the NFS server.\nMore info: https://kubernetes.io/docs/concepts/storage/volumes#nfs",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "server"
+                      ],
+                      "type": "object"
+                    },
+                    "persistentVolumeClaim": {
+                      "description": "PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.\nThis volume finds the bound PV and mounts that volume for the pod. A\nPersistentVolumeClaimVolumeSource is, essentially, a wrapper around another\ntype of volume that is owned by someone else (the system).",
+                      "properties": {
+                        "claimName": {
+                          "description": "claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.\nMore info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims",
+                          "type": "string"
+                        },
+                        "readOnly": {
+                          "description": "readOnly Will force the ReadOnly setting in VolumeMounts.\nDefault false.",
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "claimName"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "type": "object",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "set exactly one of persistentVolumeClaim, csi or nfs",
+                      "rule": "(has(self.persistentVolumeClaim) ? 1 : 0) + (has(self.csi) ? 1 : 0) + (has(self.nfs) ? 1 : 0) == 1"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "volume"
+              ],
+              "type": "object"
+            },
+            "redis": {
+              "description": "Redis adds one stream message per tile file.",
+              "properties": {
+                "field": {
+                  "default": "tiles",
+                  "description": "Field of the message holding the tile lines.",
+                  "type": "string"
+                },
+                "maxLen": {
+                  "default": 100000,
+                  "description": "MaxLen trims the stream approximately; 0 disables trimming.",
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "passwordSecretRef": {
+                  "description": "PasswordSecretRef overrides the URL's password.",
+                  "properties": {
+                    "key": {
+                      "description": "The key of the secret to select from.  Must be a valid secret key.",
+                      "type": "string"
+                    },
+                    "name": {
+                      "default": "",
+                      "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                      "type": "string"
+                    },
+                    "optional": {
+                      "description": "Specify whether the Secret or its key must be defined",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-map-type": "atomic"
+                },
+                "stream": {
+                  "default": "expiretiles",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "URL without credentials, redis:// or rediss:// (TLS).",
+                  "pattern": "^rediss?://",
+                  "type": "string"
+                },
+                "urlSecretRef": {
+                  "description": "URLSecretRef reads the URL (may contain a password) from a Secret.",
+                  "properties": {
+                    "key": {
+                      "description": "The key of the secret to select from.  Must be a valid secret key.",
+                      "type": "string"
+                    },
+                    "name": {
+                      "default": "",
+                      "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                      "type": "string"
+                    },
+                    "optional": {
+                      "description": "Specify whether the Secret or its key must be defined",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "type": "object",
+                  "x-kubernetes-map-type": "atomic"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "exactly one of url or urlSecretRef",
+                  "rule": "has(self.url) != has(self.urlSecretRef)"
+                }
+              ]
+            },
+            "zoom": {
+              "default": 14,
+              "description": "Zoom is the deepest zoom of the expire tiles; imposm also writes\ncoarser zooms for large features. imposm only supports 6-18.",
+              "format": "int32",
+              "maximum": 18,
+              "minimum": 6,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "limitTo": {
+          "description": "LimitTo restricts the import and all diffs to polygons (imposm limitto),\ne.g. several regions from one larger extract and its replication.",
+          "properties": {
+            "cacheBufferDegrees": {
+              "description": "CacheBufferDegrees keeps nodes this far (in degrees) outside the\npolygons in the cache, so ways crossing the edge stay complete\n(imposm limitto_cache_buffer). Decimal string, e.g. \"0.05\".",
+              "pattern": "^[0-9]+(\\.[0-9]+)?$",
+              "type": "string"
+            },
+            "configMapRef": {
+              "description": "ConfigMapKeyRef selects one key of a ConfigMap in the same namespace.",
+              "properties": {
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "name"
+              ],
+              "type": "object"
+            },
+            "inline": {
+              "type": "string"
+            }
+          },
+          "type": "object",
+          "x-kubernetes-validations": [
+            {
+              "message": "exactly one of inline or configMapRef",
+              "rule": "has(self.inline) != has(self.configMapRef)"
+            }
+          ]
+        },
+        "optimize": {
+          "description": "Optimize runs `imposm import -optimize` after writing.",
+          "type": "boolean"
+        },
+        "srid": {
+          "default": 3857,
+          "enum": [
+            3857,
+            4326
+          ],
+          "format": "int32",
+          "type": "integer"
+        },
+        "tablePrefix": {
+          "description": "TablePrefix replaces imposm's standard \"osm_\" table prefix: tables are\nnamed \u003cprefix\u003e_\u003ctable\u003e. Only needed to run several syncs into the same\nschemas (prefer separate schemas). Unset: imposm's osm_ tables.",
+          "pattern": "^[a-z][a-z0-9]{0,19}_?$",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "mapping": {
+      "description": "MappingSpec lists the parts of the imposm mapping. Parts are merged\nstrictly: a table defined in two parts is an error.",
+      "properties": {
+        "sources": {
+          "items": {
+            "description": "MappingSource is exactly one of ConfigMapRef or Inline.",
+            "properties": {
+              "configMapRef": {
+                "description": "ConfigMapRef: every selected key is one mapping part.",
+                "properties": {
+                  "keys": {
+                    "description": "Keys to use; all *.yaml/*.yml/*.json keys when empty.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array",
+                    "x-kubernetes-list-type": "set"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "inline": {
+                "description": "Inline mapping YAML, for small mappings and tests.",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "x-kubernetes-validations": [
+              {
+                "message": "exactly one of configMapRef or inline",
+                "rule": "has(self.configMapRef) != has(self.inline)"
+              }
+            ]
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "x-kubernetes-list-type": "atomic"
+        }
+      },
+      "required": [
+        "sources"
+      ],
+      "type": "object"
+    },
+    "maxDiffsPerRun": {
+      "default": 100,
+      "description": "MaxDiffsPerRun caps how many replication diffs one run applies, so a long\noutage is caught up over several bounded runs.",
+      "format": "int32",
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "runner": {
+      "description": "RunnerSpec configures the sync Job pods.\n\nThe runner image and service account are set by the operator's admin (chart\nvalues / controller flags), not per sync: whoever may write a sync must not\nbe able to run arbitrary code or borrow a service account through it.",
+      "properties": {
+        "activeDeadline": {
+          "default": "24h",
+          "description": "ActiveDeadline bounds a single run, as a Go duration: \"24h\", \"90m\",\n\"1h30m\", \"38s\". At least one minute. Import steps resume across runs,\nbut each step (e.g. imposm -write of the planet) must fit in one run.",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
+          "type": "string"
+        },
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Annotations added to the runner pods (e.g. backup or autoscaler opt-outs).\nKeys under imposm.johanjk.github.io/ are reserved.",
+          "type": "object",
+          "x-kubernetes-validations": [
+            {
+              "message": "keys under imposm.johanjk.github.io/ are reserved",
+              "rule": "self.all(k, !k.startsWith('imposm.johanjk.github.io/') \u0026\u0026 !k.contains('.imposm.johanjk.github.io/'))"
+            }
+          ]
+        },
+        "imagePullPolicy": {
+          "description": "PullPolicy describes a policy for if/when to pull a container image",
+          "type": "string"
+        },
+        "imagePullSecrets": {
+          "items": {
+            "description": "LocalObjectReference contains enough information to let you locate the\nreferenced object inside the same namespace.",
+            "properties": {
+              "name": {
+                "default": "",
+                "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "x-kubernetes-map-type": "atomic"
+          },
+          "type": "array"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Labels added to the runner pods (e.g. cost allocation, mesh opt-out).\nKeys under imposm.johanjk.github.io/ and app.kubernetes.io/ are reserved.",
+          "type": "object",
+          "x-kubernetes-validations": [
+            {
+              "message": "keys under imposm.johanjk.github.io/ and app.kubernetes.io/ are reserved",
+              "rule": "self.all(k, !k.startsWith('imposm.johanjk.github.io/') \u0026\u0026 !k.contains('.imposm.johanjk.github.io/') \u0026\u0026 !k.startsWith('app.kubernetes.io/') \u0026\u0026 !k.contains('.app.kubernetes.io/'))"
+            }
+          ]
+        },
+        "nodeSelector": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "resources": {
+          "description": "ResourceRequirements describes the compute resource requirements.",
+          "properties": {
+            "claims": {
+              "description": "Claims lists the names of resources, defined in spec.resourceClaims,\nthat are used by this container.\n\nThis field depends on the\nDynamicResourceAllocation feature gate.\n\nThis field is immutable. It can only be set for containers.",
+              "items": {
+                "description": "ResourceClaim references one entry in PodSpec.ResourceClaims.",
+                "properties": {
+                  "name": {
+                    "description": "Name must match the name of one entry in pod.spec.resourceClaims of\nthe Pod where this field is used. It makes that resource available\ninside a container.",
+                    "type": "string"
+                  },
+                  "request": {
+                    "description": "Request is the name chosen for a request in the referenced claim.\nIf empty, everything from the claim is made available, otherwise\nonly the result of this request.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array",
+              "x-kubernetes-list-map-keys": [
+                "name"
+              ],
+              "x-kubernetes-list-type": "map"
+            },
+            "limits": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "x-kubernetes-int-or-string": true
+              },
+              "description": "Limits describes the maximum amount of compute resources allowed.\nMore info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+              "type": "object"
+            },
+            "requests": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "x-kubernetes-int-or-string": true
+              },
+              "description": "Requests describes the minimum amount of compute resources required.\nIf Requests is omitted for a container, it defaults to Limits if that is explicitly specified,\notherwise to an implementation-defined value. Requests cannot exceed Limits.\nMore info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "tolerations": {
+          "items": {
+            "description": "The pod this Toleration is attached to tolerates any taint that matches\nthe triple \u003ckey,value,effect\u003e using the matching operator \u003coperator\u003e.",
+            "properties": {
+              "effect": {
+                "description": "Effect indicates the taint effect to match. Empty means match all taint effects.\nWhen specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.",
+                "type": "string"
+              },
+              "key": {
+                "description": "Key is the taint key that the toleration applies to. Empty means match all taint keys.\nIf the key is empty, operator must be Exists; this combination means to match all values and all keys.",
+                "type": "string"
+              },
+              "operator": {
+                "description": "Operator represents a key's relationship to the value.\nValid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.\nExists is equivalent to wildcard for value, so that a pod can\ntolerate all taints of a particular category.\nLt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).",
+                "type": "string"
+              },
+              "tolerationSeconds": {
+                "description": "TolerationSeconds represents the period of time the toleration (which must be\nof effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,\nit is not set, which means tolerate the taint forever (do not evict). Zero and\nnegative values will be treated as 0 (evict immediately) by the system.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "value": {
+                "description": "Value is the taint value the toleration matches to.\nIf the operator is Exists, the value should be empty, otherwise just a regular string.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "schedule": {
+      "default": "17 * * * *",
+      "description": "Schedule is the cron schedule of sync runs.",
+      "type": "string"
+    },
+    "source": {
+      "description": "SourceSpec is the OSM upstream.",
+      "properties": {
+        "baseURL": {
+          "description": "BaseURL of the mirror, e.g. https://download.geofabrik.de/europe/",
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "checksum": {
+          "default": "md5",
+          "description": "Checksum verification of the snapshot against \u003cpbf\u003e.md5.",
+          "enum": [
+            "md5",
+            "none"
+          ],
+          "type": "string"
+        },
+        "pbfPath": {
+          "description": "PBFPath is the snapshot path relative to BaseURL.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "replicationBaseURL": {
+          "description": "ReplicationBaseURL, when set, is the server for the replication files\ninstead of BaseURL: e.g. the snapshot from a planet mirror and the diffs\nfrom planet.openstreetmap.org. Changing where diffs come from re-imports\n(a different server may be a different sequence space).",
+          "pattern": "^https?://",
+          "type": "string"
+        },
+        "replicationPath": {
+          "description": "ReplicationPath is the replication directory (the one holding state.txt)\nrelative to ReplicationBaseURL (default BaseURL). \"{frequency}\" is\nreplaced by UpdateFrequency.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "updateFrequency": {
+          "default": "day",
+          "enum": [
+            "minute",
+            "hour",
+            "day"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseURL",
+        "pbfPath",
+        "replicationPath"
+      ],
+      "type": "object"
+    },
+    "storage": {
+      "description": "StorageSpec is the persistent volume for the imposm cache and downloads.\nBy default a PVC is created (size, storageClassName). Alternatively use a\npre-created PVC (existingClaim) or any other volume source (volume), e.g.\nan inline CSI volume (nfs.csi.k8s.io, smb.csi.k8s.io, ...). The imposm\ncache must survive between runs, so the volume must be persistent:\nonly persistentVolumeClaim, csi and nfs are accepted. size and\nstorageClassName are ignored with existingClaim or volume.",
+      "properties": {
+        "existingClaim": {
+          "description": "ExistingClaim uses a pre-created PVC instead of creating one.",
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "20Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
+        },
+        "storageClassName": {
+          "type": "string"
+        },
+        "volume": {
+          "description": "Volume is a persistent volume source instead of a created PVC,\ntypically an inline CSI volume.",
+          "properties": {
+            "csi": {
+              "description": "CSI is an inline CSI volume (the driver must support ephemeral inline use).",
+              "properties": {
+                "driver": {
+                  "description": "driver is the name of the CSI driver that handles this volume.\nConsult with your admin for the correct name as registered in the cluster.",
+                  "type": "string"
+                },
+                "fsType": {
+                  "description": "fsType to mount. Ex. \"ext4\", \"xfs\", \"ntfs\".\nIf not provided, the empty value is passed to the associated CSI driver\nwhich will determine the default filesystem to apply.",
+                  "type": "string"
+                },
+                "nodePublishSecretRef": {
+                  "description": "nodePublishSecretRef is a reference to the secret object containing\nsensitive information to pass to the CSI driver to complete the CSI\nNodePublishVolume and NodeUnpublishVolume calls.\nThis field is optional, and  may be empty if no secret is required. If the\nsecret object contains more than one secret, all secret references are passed.",
+                  "properties": {
+                    "name": {
+                      "default": "",
+                      "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object",
+                  "x-kubernetes-map-type": "atomic"
+                },
+                "readOnly": {
+                  "description": "readOnly specifies a read-only configuration for the volume.\nDefaults to false (read/write).",
+                  "type": "boolean"
+                },
+                "volumeAttributes": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "description": "volumeAttributes stores driver-specific properties that are passed to the CSI\ndriver. Consult your driver's documentation for supported values.",
+                  "type": "object"
+                }
+              },
+              "required": [
+                "driver"
+              ],
+              "type": "object"
+            },
+            "nfs": {
+              "description": "Represents an NFS mount that lasts the lifetime of a pod.\nNFS volumes do not support ownership management or SELinux relabeling.",
+              "properties": {
+                "path": {
+                  "description": "path that is exported by the NFS server.\nMore info: https://kubernetes.io/docs/concepts/storage/volumes#nfs",
+                  "type": "string"
+                },
+                "readOnly": {
+                  "description": "readOnly here will force the NFS export to be mounted with read-only permissions.\nDefaults to false.\nMore info: https://kubernetes.io/docs/concepts/storage/volumes#nfs",
+                  "type": "boolean"
+                },
+                "server": {
+                  "description": "server is the hostname or IP address of the NFS server.\nMore info: https://kubernetes.io/docs/concepts/storage/volumes#nfs",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "server"
+              ],
+              "type": "object"
+            },
+            "persistentVolumeClaim": {
+              "description": "PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.\nThis volume finds the bound PV and mounts that volume for the pod. A\nPersistentVolumeClaimVolumeSource is, essentially, a wrapper around another\ntype of volume that is owned by someone else (the system).",
+              "properties": {
+                "claimName": {
+                  "description": "claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.\nMore info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims",
+                  "type": "string"
+                },
+                "readOnly": {
+                  "description": "readOnly Will force the ReadOnly setting in VolumeMounts.\nDefault false.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "claimName"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "object",
+          "x-kubernetes-validations": [
+            {
+              "message": "set exactly one of persistentVolumeClaim, csi or nfs",
+              "rule": "(has(self.persistentVolumeClaim) ? 1 : 0) + (has(self.csi) ? 1 : 0) + (has(self.nfs) ? 1 : 0) == 1"
+            }
+          ]
+        }
+      },
+      "type": "object",
+      "x-kubernetes-validations": [
+        {
+          "message": "set at most one of existingClaim and volume",
+          "rule": "!(has(self.existingClaim) \u0026\u0026 has(self.volume))"
+        }
+      ]
+    },
+    "suspend": {
+      "description": "Suspend stops scheduling new runs.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "database",
+    "mapping",
+    "source"
+  ],
+  "title": "ImposmSyncSpec",
+  "type": "object"
+}

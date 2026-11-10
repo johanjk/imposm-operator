@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "imposm.fullname" . }}
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  # a crash-looping replica must not block node drains
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels: {{- include "imposm.controllerSelector" . | nindent 6 }}
+{{- end }}

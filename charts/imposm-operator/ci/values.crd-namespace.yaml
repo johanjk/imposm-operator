@@ -1,0 +1,5 @@
+---
+# Operator for ImposmSync resources, restricted to its namespace.
+mode: crd
+rbac:
+  scope: namespace

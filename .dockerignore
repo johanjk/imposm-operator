@@ -1,0 +1,12 @@
+*
+!go.mod
+!go.sum
+!api/
+!cmd/
+!internal/
+!hack/tablesums/
+!hack/expirecheck/
+!containers/patches/
+!test/fixtures/monaco/
+internal/**/testdata/
+internal/**/*_test.go

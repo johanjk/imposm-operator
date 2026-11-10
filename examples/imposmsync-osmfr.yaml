@@ -1,0 +1,48 @@
+# A region kept current with minutely diffs, from openstreetmap.fr.
+#
+# kubectl apply -f examples/imposmsync-osmfr.yaml
+# (mapping ConfigMap and database as for imposmsync.yaml)
+#
+# Geofabrik's public regional diffs are daily; openstreetmap.fr publishes
+# minutely ones for its extracts (France's regions and departments, and many
+# other countries): https://download.openstreetmap.fr/
+# - use <region>.osm.pbf, not <region>-latest.osm.pbf: only the former has an
+#   .md5 next to it (they are the same file).
+# - the extracts are rebuilt daily, so a fresh import catches up a day of
+#   minutely diffs (~1400) before it is deployed: maxDiffsPerRun is raised so
+#   that takes one run, not fourteen.
+# - minutely sequences are the planet's minutely sequences, clipped to the
+#   region.
+# Tested by hack/minutely-smoketest.sh (Corse: import, ~7h of minutely diffs,
+# compared with a direct import of the same data).
+apiVersion: imposm.johanjk.github.io/v1alpha1
+kind: ImposmSync
+metadata:
+  name: bretagne
+spec:
+  source:
+    baseURL: https://download.openstreetmap.fr/
+    pbfPath: extracts/europe/france/bretagne.osm.pbf
+    replicationPath: replication/europe/france/bretagne/minute/
+    updateFrequency: minute
+  database:
+    host: osm-rw
+    database: osm
+    user: osm
+    sslMode: require
+    pgpassSecretRef:
+      name: osm-app
+      key: pgpass
+  mapping:
+    sources:
+      - configMapRef:
+          name: osm-mapping
+  imposm:
+    srid: 3857
+    expireTiles:
+      zoom: 14
+  schedule: "*/2 * * * *"   # every 2 minutes; runs never overlap (concurrencyPolicy: Forbid)
+  maxDiffsPerRun: 2000
+  diffChunkSize: 60
+  storage:
+    size: 20Gi

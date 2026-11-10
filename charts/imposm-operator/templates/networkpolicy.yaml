@@ -1,0 +1,46 @@
+{{- $np := .Values.networkPolicy }}
+{{- if and $np.enabled (or $np.ingress $np.egress) }}
+{{- $api := list }}
+{{- range $np.controller.apiServer.cidrs }}{{ $api = append $api (dict "ipBlock" (dict "cidr" .)) }}{{ end }}
+# Controller: receives only metrics and probe traffic; talks only to DNS and
+# the Kubernetes API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "imposm.fullname" . }}-controller
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "imposm.controllerSelector" . | nindent 6 }}
+  policyTypes:
+    {{- if $np.ingress }}
+    - Ingress
+    {{- end }}
+    {{- if $np.egress }}
+    - Egress
+    {{- end }}
+  {{- if $np.ingress }}
+  ingress:
+    - ports:
+        - {protocol: TCP, port: {{ include "imposm.metricsPort" . }}}
+      {{- with $np.controller.metricsFrom }}
+      from: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    - ports:
+        - {protocol: TCP, port: 8081}   # health probes
+  {{- end }}
+  {{- if $np.egress }}
+  egress:
+    - to: {{- toYaml $np.dns | nindent 8 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - ports:
+        {{- range $np.controller.apiServer.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+      {{- if $api }}
+      to: {{- toYaml $api | nindent 8 }}
+      {{- end }}
+  {{- end }}
+{{- end }}

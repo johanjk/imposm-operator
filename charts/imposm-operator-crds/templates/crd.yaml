@@ -1,0 +1,6 @@
+{{- /* The generated CRD verbatim (hack/genschema formats it), plus the
+annotation that keeps it on helm uninstall: deleting the CRD would delete
+every ImposmSync with it. */}}
+{{- $raw := .Files.Get "files/imposm.johanjk.github.io_imposmsyncs.yaml" }}
+{{- if not (contains "\n  annotations:\n" $raw) }}{{ fail "CRD metadata has no annotations block" }}{{ end }}
+{{ $raw | replace "\n  annotations:\n" "\n  annotations:\n    helm.sh/resource-policy: keep\n" }}

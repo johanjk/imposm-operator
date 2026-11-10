@@ -1,0 +1,13 @@
+# Operator values for test/e2e/run.sh (the sync itself is sync-spec.yaml).
+
+# The fixture server is an in-cluster pod: the runner policy only allows the
+# upstream on public addresses, so it needs its own rule.
+networkPolicy:
+  runner:
+    extraEgress:
+      - ports:
+          - port: 8080
+        to:
+          - podSelector:
+              matchLabels:
+                app: fx

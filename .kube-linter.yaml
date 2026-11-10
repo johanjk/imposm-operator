@@ -1,0 +1,14 @@
+---
+checks:
+  addAllBuiltIn: true
+  doNotAutoAddDefaults: false
+  exclude:
+    - schema-validation
+    - sorted-keys
+
+    - required-label-owner
+    - minimum-three-replicas
+    - required-annotation-email
+    - dnsconfig-options
+    - latest-tag
+    - use-namespace

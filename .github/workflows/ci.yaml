@@ -1,0 +1,81 @@
+name: ci
+on:
+  push: {branches: [master]}
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}   # each job asks for what it needs
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    # fuzz seed corpora run as plain tests in make test; fuzzing itself is
+    # local only (make fuzz FUZZTIME=5m)
+    name: unit, envtest, chart
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go.mod}
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - run: make generate && git diff --exit-code   # generated files are committed
+      - run: make test
+      - run: make helm-lint
+
+  docker:
+    # the images as deployments.yaml publishes them (docker-bake.hcl), for
+    # this platform only; nothing is pushed
+    name: images
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build images
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        with:
+          source: .
+          push: false
+          # Nothing built here is published: the release images are built
+          # in deployments.yaml. Only master writes the cache.
+          set: |
+            *.cache-from=type=gha
+            ${{ github.ref == 'refs/heads/master' && '*.cache-to=type=gha,mode=max' || '' }}
+
+  workflows:
+    name: workflow lint
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go.mod, cache: false}
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: zizmor
+        run: pipx run zizmor==1.31.1 --format github .github
+        env:
+          GH_TOKEN: ${{ github.token }}   # online audits (e.g. impostor commits)
+
+  # https://github.com/marketplace/actions/alls-green#why
+  check:  # the single required check for branch protection and deployments.yaml
+    if: always()
+    needs: [test, docker, workflows]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  # The chaos suites are in chaos.yaml (only when engine/runner code changes).
+  # The kind + CloudNativePG + Chaos Mesh e2e (`make e2e`, `make e2e-vm`) is
+  # too slow for CI and runs locally only.

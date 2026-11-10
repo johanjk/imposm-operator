@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "image": {
+      "properties": {
+        "controller": {
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "runner": {
+          "properties": {
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "type": "string"
+            },
+            "repository": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "mode": {
+      "description": "crd: ImposmSync resources + controller; configmap: labelled ConfigMaps + controller (no CRD)",
+      "enum": [
+        "crd",
+        "configmap"
+      ],
+      "type": "string"
+    },
+    "rbac": {
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "scope": {
+          "enum": [
+            "cluster",
+            "namespace"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "watchNamespace": {
+      "type": "string"
+    }
+  },
+  "type": "object"
+}

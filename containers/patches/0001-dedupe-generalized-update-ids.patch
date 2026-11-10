@@ -1,0 +1,22 @@
+diff --git a/database/postgis/postgis.go b/database/postgis/postgis.go
+index 948e3f8..9b48e19 100644
+--- a/database/postgis/postgis.go
++++ b/database/postgis/postgis.go
+@@ -211,7 +211,17 @@ func (pg *PostGIS) GeneralizeUpdates() error {
+ 	defer log.Step("Updating generalized tables")()
+ 	for _, table := range pg.sortedGeneralizedTables() {
+ 		if ids, ok := pg.updatedIDs[table]; ok {
++			// An element that matches the same table more than once (e.g. a
++			// way that is both a road and a railway) is listed once per
++			// match; inserting it repeatedly duplicates its generalized
++			// rows (and the duplicates multiply in tables generalized from
++			// generalized tables).
++			seen := make(map[int64]struct{}, len(ids))
+ 			for _, id := range ids {
++				if _, dup := seen[id]; dup {
++					continue
++				}
++				seen[id] = struct{}{}
+ 				pg.txRouter.Insert(table, []any{id})
+ 			}
+ 		}

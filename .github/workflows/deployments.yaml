@@ -1,0 +1,89 @@
+name: Release Deployment
+
+# Publishes the controller and runner images (docker-bake.hcl, group
+# "release": amd64 and arm64) once ci.yaml passed for the commit.
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions: {}
+
+jobs:
+  release_containers:
+    permissions:
+      contents: read
+      checks: read  # action-wait-for-check
+      packages: write  # needed for ghcr access
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wait for CI to succeed
+        uses: fountainhead/action-wait-for-check@5a908a24814494009c4bb27c242ea38c93c593be # v1.2.0
+        id: wait-for-ci
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: check
+          ref: ${{ github.sha }}
+          timeoutSeconds: 3600
+
+      - name: CI failed
+        if: steps.wait-for-ci.outputs.conclusion != 'success'
+        run: exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Controller image tags
+        id: meta-controller
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/imposm-operator
+          bake-target: docker-metadata-action-controller
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Runner image tags
+        id: meta-runner
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/imposm-operator-runner
+          bake-target: docker-metadata-action-runner
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # Built from scratch, without the CI cache. BuildKit attaches SLSA
+      # provenance and an SBOM to the pushed images.
+      - name: Build and push
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        with:
+          source: .
+          files: |
+            ./docker-bake.hcl
+            ${{ steps.meta-controller.outputs.bake-file }}
+            ${{ steps.meta-runner.outputs.bake-file }}
+          targets: release
+          push: true
+          provenance: mode=max
+          sbom: true

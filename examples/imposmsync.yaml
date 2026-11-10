@@ -1,0 +1,26 @@
+# A minimal sync (mode=crd, the default): Monaco from Geofabrik with daily
+# diffs, into the CloudNativePG database of examples/cnpg-cluster.yaml with
+# the mapping of examples/mapping. More: imposmsync-expiretiles.yaml.
+apiVersion: imposm.johanjk.github.io/v1alpha1
+kind: ImposmSync
+metadata:
+  name: monaco
+spec:
+  source:
+    baseURL: https://download.geofabrik.de/europe/
+    pbfPath: monaco-latest.osm.pbf
+    replicationPath: monaco-updates/
+  schedule: "17 * * * *"   # every hour at minute 17
+  database:
+    host: osm-rw
+    database: osm
+    user: osm
+    pgpassSecretRef:
+      name: osm-app
+      key: pgpass
+  mapping:
+    sources:
+      - configMapRef:
+          name: osm-mapping
+  storage:
+    size: 5Gi

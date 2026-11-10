@@ -1,0 +1,1184 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: imposmsyncs.imposm.johanjk.github.io
+spec:
+  group: imposm.johanjk.github.io
+  names:
+    categories:
+      - osm
+    kind: ImposmSync
+    listKind: ImposmSyncList
+    plural: imposmsyncs
+    shortNames:
+      - isync
+    singular: imposmsync
+  scope: Namespaced
+  versions:
+    - additionalPrinterColumns:
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .status.lag
+          name: Lag
+          type: string
+        - jsonPath: .status.activity
+          name: Activity
+          type: string
+        - jsonPath: .status.lastRunTime
+          name: Last Run
+          type: date
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+        - jsonPath: .status.currentSequence
+          name: Sequence
+          priority: 1
+          type: integer
+        - jsonPath: .status.upstreamSequence
+          name: Upstream
+          priority: 1
+          type: integer
+        - jsonPath: .status.reimport.progress
+          name: Reimport
+          priority: 1
+          type: string
+        - jsonPath: .status.production.backupAvailable
+          name: Backup
+          priority: 1
+          type: boolean
+        - jsonPath: .status.storage.summary
+          name: Storage
+          priority: 1
+          type: string
+        - jsonPath: .status.expirePending
+          name: Expire Pending
+          priority: 1
+          type: integer
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: ImposmSync keeps a PostGIS database in sync with OpenStreetMap using imposm.
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: ImposmSyncSpec describes one OSM database kept in sync by imposm.
+              properties:
+                database:
+                  description: DatabaseSpec is the PostGIS target.
+                  properties:
+                    database:
+                      minLength: 1
+                      type: string
+                    host:
+                      minLength: 1
+                      type: string
+                    passwordSecretRef:
+                      description: PasswordSecretRef points at a key holding the plain password.
+                      properties:
+                        key:
+                          description: The key of the secret to select from.  Must be a valid secret key.
+                          type: string
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the Secret or its key must be defined
+                          type: boolean
+                      required:
+                        - key
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    pgpassSecretRef:
+                      description: |-
+                        PgpassSecretRef points at a key holding a libpq password file
+                        (CloudNativePG's <cluster>-app secret has one under "pgpass").
+                      properties:
+                        key:
+                          description: The key of the secret to select from.  Must be a valid secret key.
+                          type: string
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the Secret or its key must be defined
+                          type: boolean
+                      required:
+                        - key
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    port:
+                      default: 5432
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    schemas:
+                      description: SchemasSpec names the imposm schemas and the operator's bookkeeping schema.
+                      properties:
+                        backup:
+                          default: backup
+                          type: string
+                        import:
+                          default: import
+                          type: string
+                        production:
+                          default: public
+                          type: string
+                        state:
+                          default: imposm_operator
+                          description: State is where the operator records imports and applied diffs.
+                          type: string
+                      type: object
+                    sslMode:
+                      default: require
+                      enum:
+                        - disable
+                        - require
+                        - verify-ca
+                        - verify-full
+                      type: string
+                    user:
+                      minLength: 1
+                      type: string
+                  required:
+                    - database
+                    - host
+                    - user
+                  type: object
+                deletionPolicy:
+                  default: Retain
+                  description: |-
+                    DeletionPolicy decides what happens to the cache volume when the sync is
+                    deleted. The database is never touched.
+                  enum:
+                    - Retain
+                    - Delete
+                  type: string
+                deploy:
+                  description: DeploySpec controls promotion from the import to the production schema.
+                  properties:
+                    auto:
+                      default: true
+                      description: Auto deploys a new import once it has caught up with the upstream.
+                      type: boolean
+                    keepBackup:
+                      description: KeepBackup keeps the previous production data in the backup schema.
+                      type: boolean
+                    syncDuringReimport:
+                      default: auto
+                      description: |-
+                        SyncDuringReimport keeps production receiving diffs while a new import
+                        is built (after a mapping, SRID, prefix, limitTo or schema change, or the
+                        reimport action), so its lag does not grow until the deploy. Each import
+                        keeps its own imposm cache meanwhile. auto: when the volume has room for
+                        a second cache (about 1.2 times the current one); always: regardless;
+                        never: production pauses until the new import is deployed.
+                      enum:
+                        - auto
+                        - always
+                        - never
+                      type: string
+                  type: object
+                diffChunkSize:
+                  default: 10
+                  description: DiffChunkSize is how many diffs are handed to one `imposm diff` call.
+                  format: int32
+                  maximum: 1000
+                  minimum: 1
+                  type: integer
+                imposm:
+                  description: ImposmSpec are settings forwarded to imposm.
+                  properties:
+                    cacheCheckpointLimit:
+                      anyOf:
+                        - type: integer
+                        - type: string
+                      default: 4Gi
+                      description: |-
+                        CacheCheckpointLimit: imposm's cache and the database are not updated
+                        atomically, so before each diff chunk the cache is checkpointed and an
+                        interrupted chunk is rolled back. Reflink clones (XFS, btrfs, ZFS) are
+                        always used when available; otherwise the cache is copied if it is
+                        smaller than this limit. Without a checkpoint an interrupted chunk
+                        triggers a re-import (production keeps serving). "0" disables copying.
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    expireTiles:
+                      description: |-
+                        ExpireTilesSpec enables imposm expire-tile lists (one "z/x/y" per line)
+                        for tile cache invalidation: imposm's standard files on a volume, and/or a
+                        Redis stream in zaptiles' format.
+                        Tiles of a diff chunk are released only after the chunk committed and are
+                        delivered at least once to every configured sink. When the changed tiles
+                        cannot be known (a replacement import is deployed, or a chunk's commit was
+                        only proven afterwards) the single tile 0/0/0 is sent, which invalidates
+                        everything. Without files or redis, files are kept in the data volume
+                        under expiretiles/.
+                      properties:
+                        files:
+                          description: Files writes imposm's <YYYYMMDD>/<time>.tiles files to a shared volume.
+                          properties:
+                            subPath:
+                              description: SubPath inside the volume.
+                              type: string
+                            volume:
+                              description: Volume holding the files; typically an RWX persistentVolumeClaim.
+                              properties:
+                                csi:
+                                  description: CSI is an inline CSI volume (the driver must support ephemeral inline use).
+                                  properties:
+                                    driver:
+                                      description: |-
+                                        driver is the name of the CSI driver that handles this volume.
+                                        Consult with your admin for the correct name as registered in the cluster.
+                                      type: string
+                                    fsType:
+                                      description: |-
+                                        fsType to mount. Ex. "ext4", "xfs", "ntfs".
+                                        If not provided, the empty value is passed to the associated CSI driver
+                                        which will determine the default filesystem to apply.
+                                      type: string
+                                    nodePublishSecretRef:
+                                      description: |-
+                                        nodePublishSecretRef is a reference to the secret object containing
+                                        sensitive information to pass to the CSI driver to complete the CSI
+                                        NodePublishVolume and NodeUnpublishVolume calls.
+                                        This field is optional, and  may be empty if no secret is required. If the
+                                        secret object contains more than one secret, all secret references are passed.
+                                      properties:
+                                        name:
+                                          default: ""
+                                          description: |-
+                                            Name of the referent.
+                                            This field is effectively required, but due to backwards compatibility is
+                                            allowed to be empty. Instances of this type with an empty value here are
+                                            almost certainly wrong.
+                                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                          type: string
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    readOnly:
+                                      description: |-
+                                        readOnly specifies a read-only configuration for the volume.
+                                        Defaults to false (read/write).
+                                      type: boolean
+                                    volumeAttributes:
+                                      additionalProperties:
+                                        type: string
+                                      description: |-
+                                        volumeAttributes stores driver-specific properties that are passed to the CSI
+                                        driver. Consult your driver's documentation for supported values.
+                                      type: object
+                                  required:
+                                    - driver
+                                  type: object
+                                nfs:
+                                  description: |-
+                                    Represents an NFS mount that lasts the lifetime of a pod.
+                                    NFS volumes do not support ownership management or SELinux relabeling.
+                                  properties:
+                                    path:
+                                      description: |-
+                                        path that is exported by the NFS server.
+                                        More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                                      type: string
+                                    readOnly:
+                                      description: |-
+                                        readOnly here will force the NFS export to be mounted with read-only permissions.
+                                        Defaults to false.
+                                        More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                                      type: boolean
+                                    server:
+                                      description: |-
+                                        server is the hostname or IP address of the NFS server.
+                                        More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                                      type: string
+                                  required:
+                                    - path
+                                    - server
+                                  type: object
+                                persistentVolumeClaim:
+                                  description: |-
+                                    PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.
+                                    This volume finds the bound PV and mounts that volume for the pod. A
+                                    PersistentVolumeClaimVolumeSource is, essentially, a wrapper around another
+                                    type of volume that is owned by someone else (the system).
+                                  properties:
+                                    claimName:
+                                      description: |-
+                                        claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.
+                                        More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+                                      type: string
+                                    readOnly:
+                                      description: |-
+                                        readOnly Will force the ReadOnly setting in VolumeMounts.
+                                        Default false.
+                                      type: boolean
+                                  required:
+                                    - claimName
+                                  type: object
+                              type: object
+                              x-kubernetes-validations:
+                                - message: set exactly one of persistentVolumeClaim, csi or nfs
+                                  rule: '(has(self.persistentVolumeClaim) ? 1 : 0) + (has(self.csi) ? 1 : 0) + (has(self.nfs) ? 1 : 0) == 1'
+                          required:
+                            - volume
+                          type: object
+                        redis:
+                          description: Redis adds one stream message per tile file.
+                          properties:
+                            field:
+                              default: tiles
+                              description: Field of the message holding the tile lines.
+                              type: string
+                            maxLen:
+                              default: 100000
+                              description: MaxLen trims the stream approximately; 0 disables trimming.
+                              format: int64
+                              minimum: 0
+                              type: integer
+                            passwordSecretRef:
+                              description: PasswordSecretRef overrides the URL's password.
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must be a valid secret key.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key must be defined
+                                  type: boolean
+                              required:
+                                - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            stream:
+                              default: expiretiles
+                              type: string
+                            url:
+                              description: URL without credentials, redis:// or rediss:// (TLS).
+                              pattern: ^rediss?://
+                              type: string
+                            urlSecretRef:
+                              description: URLSecretRef reads the URL (may contain a password) from a Secret.
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must be a valid secret key.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key must be defined
+                                  type: boolean
+                              required:
+                                - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                          type: object
+                          x-kubernetes-validations:
+                            - message: exactly one of url or urlSecretRef
+                              rule: has(self.url) != has(self.urlSecretRef)
+                        zoom:
+                          default: 14
+                          description: |-
+                            Zoom is the deepest zoom of the expire tiles; imposm also writes
+                            coarser zooms for large features. imposm only supports 6-18.
+                          format: int32
+                          maximum: 18
+                          minimum: 6
+                          type: integer
+                      type: object
+                    limitTo:
+                      description: |-
+                        LimitTo restricts the import and all diffs to polygons (imposm limitto),
+                        e.g. several regions from one larger extract and its replication.
+                      properties:
+                        cacheBufferDegrees:
+                          description: |-
+                            CacheBufferDegrees keeps nodes this far (in degrees) outside the
+                            polygons in the cache, so ways crossing the edge stay complete
+                            (imposm limitto_cache_buffer). Decimal string, e.g. "0.05".
+                          pattern: ^[0-9]+(\.[0-9]+)?$
+                          type: string
+                        configMapRef:
+                          description: ConfigMapKeyRef selects one key of a ConfigMap in the same namespace.
+                          properties:
+                            key:
+                              minLength: 1
+                              type: string
+                            name:
+                              minLength: 1
+                              type: string
+                          required:
+                            - key
+                            - name
+                          type: object
+                        inline:
+                          type: string
+                      type: object
+                      x-kubernetes-validations:
+                        - message: exactly one of inline or configMapRef
+                          rule: has(self.inline) != has(self.configMapRef)
+                    optimize:
+                      description: Optimize runs `imposm import -optimize` after writing.
+                      type: boolean
+                    srid:
+                      default: 3857
+                      enum:
+                        - 3857
+                        - 4326
+                      format: int32
+                      type: integer
+                    tablePrefix:
+                      description: |-
+                        TablePrefix replaces imposm's standard "osm_" table prefix: tables are
+                        named <prefix>_<table>. Only needed to run several syncs into the same
+                        schemas (prefer separate schemas). Unset: imposm's osm_ tables.
+                      pattern: ^[a-z][a-z0-9]{0,19}_?$
+                      type: string
+                  type: object
+                mapping:
+                  description: |-
+                    MappingSpec lists the parts of the imposm mapping. Parts are merged
+                    strictly: a table defined in two parts is an error.
+                  properties:
+                    sources:
+                      items:
+                        description: MappingSource is exactly one of ConfigMapRef or Inline.
+                        properties:
+                          configMapRef:
+                            description: 'ConfigMapRef: every selected key is one mapping part.'
+                            properties:
+                              keys:
+                                description: Keys to use; all *.yaml/*.yml/*.json keys when empty.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                type: array
+                                x-kubernetes-list-type: set
+                              name:
+                                minLength: 1
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          inline:
+                            description: Inline mapping YAML, for small mappings and tests.
+                            type: string
+                        type: object
+                        x-kubernetes-validations:
+                          - message: exactly one of configMapRef or inline
+                            rule: has(self.configMapRef) != has(self.inline)
+                      maxItems: 32
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: atomic
+                  required:
+                    - sources
+                  type: object
+                maxDiffsPerRun:
+                  default: 100
+                  description: |-
+                    MaxDiffsPerRun caps how many replication diffs one run applies, so a long
+                    outage is caught up over several bounded runs.
+                  format: int32
+                  maximum: 100000
+                  minimum: 1
+                  type: integer
+                runner:
+                  description: |-
+                    RunnerSpec configures the sync Job pods.
+
+                    The runner image and service account are set by the operator's admin (chart
+                    values / controller flags), not per sync: whoever may write a sync must not
+                    be able to run arbitrary code or borrow a service account through it.
+                  properties:
+                    activeDeadline:
+                      default: 24h
+                      description: |-
+                        ActiveDeadline bounds a single run, as a Go duration: "24h", "90m",
+                        "1h30m", "38s". At least one minute. Import steps resume across runs,
+                        but each step (e.g. imposm -write of the planet) must fit in one run.
+                      pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                      type: string
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Annotations added to the runner pods (e.g. backup or autoscaler opt-outs).
+                        Keys under imposm.johanjk.github.io/ are reserved.
+                      type: object
+                      x-kubernetes-validations:
+                        - message: keys under imposm.johanjk.github.io/ are reserved
+                          rule: self.all(k, !k.startsWith('imposm.johanjk.github.io/') && !k.contains('.imposm.johanjk.github.io/'))
+                    imagePullPolicy:
+                      description: PullPolicy describes a policy for if/when to pull a container image
+                      type: string
+                    imagePullSecrets:
+                      items:
+                        description: |-
+                          LocalObjectReference contains enough information to let you locate the
+                          referenced object inside the same namespace.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      type: array
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Labels added to the runner pods (e.g. cost allocation, mesh opt-out).
+                        Keys under imposm.johanjk.github.io/ and app.kubernetes.io/ are reserved.
+                      type: object
+                      x-kubernetes-validations:
+                        - message: keys under imposm.johanjk.github.io/ and app.kubernetes.io/ are reserved
+                          rule: self.all(k, !k.startsWith('imposm.johanjk.github.io/') && !k.contains('.imposm.johanjk.github.io/') && !k.startsWith('app.kubernetes.io/') && !k.contains('.app.kubernetes.io/'))
+                    nodeSelector:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    resources:
+                      description: ResourceRequirements describes the compute resource requirements.
+                      properties:
+                        claims:
+                          description: |-
+                            Claims lists the names of resources, defined in spec.resourceClaims,
+                            that are used by this container.
+
+                            This field depends on the
+                            DynamicResourceAllocation feature gate.
+
+                            This field is immutable. It can only be set for containers.
+                          items:
+                            description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                            properties:
+                              name:
+                                description: |-
+                                  Name must match the name of one entry in pod.spec.resourceClaims of
+                                  the Pod where this field is used. It makes that resource available
+                                  inside a container.
+                                type: string
+                              request:
+                                description: |-
+                                  Request is the name chosen for a request in the referenced claim.
+                                  If empty, everything from the claim is made available, otherwise
+                                  only the result of this request.
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                            - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Limits describes the maximum amount of compute resources allowed.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Requests describes the minimum amount of compute resources required.
+                            If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                            otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                            More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                          type: object
+                      type: object
+                    tolerations:
+                      items:
+                        description: |-
+                          The pod this Toleration is attached to tolerates any taint that matches
+                          the triple <key,value,effect> using the matching operator <operator>.
+                        properties:
+                          effect:
+                            description: |-
+                              Effect indicates the taint effect to match. Empty means match all taint effects.
+                              When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                            type: string
+                          key:
+                            description: |-
+                              Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                              If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                            type: string
+                          operator:
+                            description: |-
+                              Operator represents a key's relationship to the value.
+                              Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                              Exists is equivalent to wildcard for value, so that a pod can
+                              tolerate all taints of a particular category.
+                              Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                            type: string
+                          tolerationSeconds:
+                            description: |-
+                              TolerationSeconds represents the period of time the toleration (which must be
+                              of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                              it is not set, which means tolerate the taint forever (do not evict). Zero and
+                              negative values will be treated as 0 (evict immediately) by the system.
+                            format: int64
+                            type: integer
+                          value:
+                            description: |-
+                              Value is the taint value the toleration matches to.
+                              If the operator is Exists, the value should be empty, otherwise just a regular string.
+                            type: string
+                        type: object
+                      type: array
+                  type: object
+                schedule:
+                  default: 17 * * * *
+                  description: Schedule is the cron schedule of sync runs.
+                  type: string
+                source:
+                  description: SourceSpec is the OSM upstream.
+                  properties:
+                    baseURL:
+                      description: BaseURL of the mirror, e.g. https://download.geofabrik.de/europe/
+                      pattern: ^https?://
+                      type: string
+                    checksum:
+                      default: md5
+                      description: Checksum verification of the snapshot against <pbf>.md5.
+                      enum:
+                        - md5
+                        - none
+                      type: string
+                    pbfPath:
+                      description: PBFPath is the snapshot path relative to BaseURL.
+                      minLength: 1
+                      type: string
+                    replicationBaseURL:
+                      description: |-
+                        ReplicationBaseURL, when set, is the server for the replication files
+                        instead of BaseURL: e.g. the snapshot from a planet mirror and the diffs
+                        from planet.openstreetmap.org. Changing where diffs come from re-imports
+                        (a different server may be a different sequence space).
+                      pattern: ^https?://
+                      type: string
+                    replicationPath:
+                      description: |-
+                        ReplicationPath is the replication directory (the one holding state.txt)
+                        relative to ReplicationBaseURL (default BaseURL). "{frequency}" is
+                        replaced by UpdateFrequency.
+                      minLength: 1
+                      type: string
+                    updateFrequency:
+                      default: day
+                      enum:
+                        - minute
+                        - hour
+                        - day
+                      type: string
+                  required:
+                    - baseURL
+                    - pbfPath
+                    - replicationPath
+                  type: object
+                storage:
+                  description: |-
+                    StorageSpec is the persistent volume for the imposm cache and downloads.
+                    By default a PVC is created (size, storageClassName). Alternatively use a
+                    pre-created PVC (existingClaim) or any other volume source (volume), e.g.
+                    an inline CSI volume (nfs.csi.k8s.io, smb.csi.k8s.io, ...). The imposm
+                    cache must survive between runs, so the volume must be persistent:
+                    only persistentVolumeClaim, csi and nfs are accepted. size and
+                    storageClassName are ignored with existingClaim or volume.
+                  properties:
+                    existingClaim:
+                      description: ExistingClaim uses a pre-created PVC instead of creating one.
+                      type: string
+                    size:
+                      anyOf:
+                        - type: integer
+                        - type: string
+                      default: 20Gi
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    storageClassName:
+                      type: string
+                    volume:
+                      description: |-
+                        Volume is a persistent volume source instead of a created PVC,
+                        typically an inline CSI volume.
+                      properties:
+                        csi:
+                          description: CSI is an inline CSI volume (the driver must support ephemeral inline use).
+                          properties:
+                            driver:
+                              description: |-
+                                driver is the name of the CSI driver that handles this volume.
+                                Consult with your admin for the correct name as registered in the cluster.
+                              type: string
+                            fsType:
+                              description: |-
+                                fsType to mount. Ex. "ext4", "xfs", "ntfs".
+                                If not provided, the empty value is passed to the associated CSI driver
+                                which will determine the default filesystem to apply.
+                              type: string
+                            nodePublishSecretRef:
+                              description: |-
+                                nodePublishSecretRef is a reference to the secret object containing
+                                sensitive information to pass to the CSI driver to complete the CSI
+                                NodePublishVolume and NodeUnpublishVolume calls.
+                                This field is optional, and  may be empty if no secret is required. If the
+                                secret object contains more than one secret, all secret references are passed.
+                              properties:
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            readOnly:
+                              description: |-
+                                readOnly specifies a read-only configuration for the volume.
+                                Defaults to false (read/write).
+                              type: boolean
+                            volumeAttributes:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                volumeAttributes stores driver-specific properties that are passed to the CSI
+                                driver. Consult your driver's documentation for supported values.
+                              type: object
+                          required:
+                            - driver
+                          type: object
+                        nfs:
+                          description: |-
+                            Represents an NFS mount that lasts the lifetime of a pod.
+                            NFS volumes do not support ownership management or SELinux relabeling.
+                          properties:
+                            path:
+                              description: |-
+                                path that is exported by the NFS server.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                              type: string
+                            readOnly:
+                              description: |-
+                                readOnly here will force the NFS export to be mounted with read-only permissions.
+                                Defaults to false.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                              type: boolean
+                            server:
+                              description: |-
+                                server is the hostname or IP address of the NFS server.
+                                More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                              type: string
+                          required:
+                            - path
+                            - server
+                          type: object
+                        persistentVolumeClaim:
+                          description: |-
+                            PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.
+                            This volume finds the bound PV and mounts that volume for the pod. A
+                            PersistentVolumeClaimVolumeSource is, essentially, a wrapper around another
+                            type of volume that is owned by someone else (the system).
+                          properties:
+                            claimName:
+                              description: |-
+                                claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.
+                                More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+                              type: string
+                            readOnly:
+                              description: |-
+                                readOnly Will force the ReadOnly setting in VolumeMounts.
+                                Default false.
+                              type: boolean
+                          required:
+                            - claimName
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                        - message: set exactly one of persistentVolumeClaim, csi or nfs
+                          rule: '(has(self.persistentVolumeClaim) ? 1 : 0) + (has(self.csi) ? 1 : 0) + (has(self.nfs) ? 1 : 0) == 1'
+                  type: object
+                  x-kubernetes-validations:
+                    - message: set at most one of existingClaim and volume
+                      rule: '!(has(self.existingClaim) && has(self.volume))'
+                suspend:
+                  description: Suspend stops scheduling new runs.
+                  type: boolean
+              required:
+                - database
+                - mapping
+                - source
+              type: object
+            status:
+              description: ImposmSyncStatus is reported by the controller from run results.
+              properties:
+                activeRun:
+                  description: ActiveRun is set while a sync Job runs.
+                  properties:
+                    bytesDone:
+                      description: Download progress.
+                      format: int64
+                      type: integer
+                    bytesTotal:
+                      format: int64
+                      type: integer
+                    chunk:
+                      description: Diff chunk i of n, sequences from-to.
+                      format: int32
+                      type: integer
+                    chunks:
+                      format: int32
+                      type: integer
+                    detail:
+                      type: string
+                    fromSequence:
+                      format: int64
+                      type: integer
+                    imposmStep:
+                      description: ImposmStep is imposm's own current step, e.g. "Writing OSM data".
+                      type: string
+                    job:
+                      type: string
+                    nodes:
+                      description: imposm counters of the current step.
+                      format: int64
+                      type: integer
+                    percent:
+                      format: int32
+                      type: integer
+                    relations:
+                      format: int64
+                      type: integer
+                    startedAt:
+                      format: date-time
+                      type: string
+                    step:
+                      description: |-
+                        Step: starting, download-snapshot, read, write, optimize, deploy,
+                        download-diffs, diff, expire-tiles, done.
+                      type: string
+                    toSequence:
+                      format: int64
+                      type: integer
+                    updatedAt:
+                      format: date-time
+                      type: string
+                    ways:
+                      format: int64
+                      type: integer
+                  required:
+                    - job
+                  type: object
+                activity:
+                  description: |-
+                    Activity is a one-line summary: what the running Job does, or when the
+                    next run is, or the last error.
+                  type: string
+                conditions:
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        format: date-time
+                        type: string
+                      message:
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
+                        maxLength: 32768
+                        type: string
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        type: string
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                        type: string
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+                consecutiveFailures:
+                  description: ConsecutiveFailures of finished runs (0 after a success).
+                  format: int32
+                  type: integer
+                currentSequence:
+                  description: CurrentSequence is the last applied replication sequence.
+                  format: int64
+                  type: integer
+                currentTimestamp:
+                  format: date-time
+                  type: string
+                expirePending:
+                  description: |-
+                    ExpirePending is the number of expire-tile batches not yet delivered
+                    to every sink (a sink is down).
+                  format: int32
+                  type: integer
+                importHash:
+                  description: |-
+                    ImportHash identifies the spec's import configuration (mapping, SRID,
+                    table prefix, limitTo, schemas). A change of the mapping, SRID or
+                    limitTo re-imports; schema, prefix and table-name changes move the
+                    existing tables (SpecApplied says when production matches).
+                  type: string
+                lag:
+                  description: Lag between upstream and current data, human readable (e.g. "2h13m").
+                  type: string
+                lagSeconds:
+                  description: LagSeconds between upstream head and current data.
+                  format: int64
+                  type: integer
+                lastJob:
+                  type: string
+                lastRunDiffs:
+                  description: LastRunDiffs applied by the last finished run.
+                  format: int32
+                  type: integer
+                lastRunDurationSeconds:
+                  description: LastRunDurationSeconds of the last finished run.
+                  format: int64
+                  type: integer
+                lastRunTime:
+                  format: date-time
+                  type: string
+                lastSuccessfulRunTime:
+                  format: date-time
+                  type: string
+                mappingHash:
+                  description: MappingHash is the sha256 of the merged mapping.
+                  type: string
+                message:
+                  type: string
+                nextRunTime:
+                  description: NextRunTime from the schedule (unset while suspended).
+                  format: date-time
+                  type: string
+                observedGeneration:
+                  format: int64
+                  type: integer
+                phase:
+                  description: Phase is the coarse state of a sync.
+                  type: string
+                production:
+                  description: |-
+                    Production is the import serving production (unset before the first
+                    deploy).
+                  properties:
+                    backupAvailable:
+                      description: |-
+                        BackupAvailable: revert-deploy can restore the previous production
+                        (deploy.keepBackup was set when this import was deployed).
+                      type: boolean
+                    deployedAt:
+                      format: date-time
+                      type: string
+                    importID:
+                      format: int64
+                      type: integer
+                    pausedMessage:
+                      type: string
+                    pausedReason:
+                      description: |-
+                        PausedReason: Disabled (deploy.syncDuringReimport: never), NoRoom (no
+                        room for a second imposm cache), SourceChanged, NoConfig,
+                        CacheUnavailable or Reverted.
+                      type: string
+                    sequence:
+                      description: Sequence and Timestamp of the newest diff in production.
+                      format: int64
+                      type: integer
+                    syncing:
+                      description: |-
+                        Syncing is false while production receives no diffs: during a
+                        re-import that cannot keep it syncing, or after revert-deploy.
+                      type: boolean
+                    timestamp:
+                      format: date-time
+                      type: string
+                  required:
+                    - backupAvailable
+                    - importID
+                    - syncing
+                  type: object
+                reimport:
+                  description: Reimport is set while a new import is built next to production.
+                  properties:
+                    importID:
+                      format: int64
+                      type: integer
+                    phase:
+                      description: |-
+                        Phase of the import: pending, downloaded, read, written, optimized
+                        (catching up), ready (awaiting deploy).
+                      type: string
+                    progress:
+                      description: Progress for kubectl, e.g. "write" or "catch-up 4655/4661".
+                      type: string
+                    reason:
+                      description: |-
+                        Reason it was started: MappingChanged, SRIDChanged, LimitToChanged,
+                        SourceChanged, ConfigChanged, ReimportAction, CacheLost, Recovery.
+                      type: string
+                    sequence:
+                      description: Sequence the import has reached (its snapshot, then its catch-up).
+                      format: int64
+                      type: integer
+                    startedAt:
+                      format: date-time
+                      type: string
+                  required:
+                    - importID
+                    - phase
+                  type: object
+                snapshotBytes:
+                  description: SnapshotBytes is the size of the downloaded snapshot.
+                  format: int64
+                  type: integer
+                storage:
+                  description: |-
+                    StorageStatus is the data volume (imposm cache and downloads) after the
+                    last run.
+                  properties:
+                    availableBytes:
+                      format: int64
+                      type: integer
+                    cacheBytes:
+                      description: |-
+                        CacheBytes is production's imposm cache; a re-import that keeps
+                        production syncing needs about 1.2 times that free (ReimportHeadroom).
+                      format: int64
+                      type: integer
+                    summary:
+                      description: Summary, e.g. "2.4Gi used, 17Gi free of 20Gi".
+                      type: string
+                    totalBytes:
+                      format: int64
+                      type: integer
+                    usedBytes:
+                      description: UsedBytes by the sync's files on the volume.
+                      format: int64
+                      type: integer
+                  required:
+                    - usedBytes
+                  type: object
+                unusedTables:
+                  description: |-
+                    UnusedTables are tables of this sync no longer in use that could not be
+                    dropped because something depends on them (e.g. a view): drop them by
+                    hand (UnusedTablesKept).
+                  items:
+                    type: string
+                  type: array
+                  x-kubernetes-list-type: atomic
+                upstreamSequence:
+                  description: UpstreamSequence is the upstream head seen by the last run.
+                  format: int64
+                  type: integer
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

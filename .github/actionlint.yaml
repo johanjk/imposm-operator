@@ -1,0 +1,9 @@
+---
+# actionlint does not parse GitHub's `$/` self-repository syntax yet (local
+# actions and reusable workflows of the running commit, which zizmor's
+# self-repository audit asks for): https://github.com/rhysd/actionlint/issues/711
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'specifying action "\$/[^"]+" in invalid format'
+      - 'reusable workflow call "\$/[^"]+" at "uses" is not following the format'

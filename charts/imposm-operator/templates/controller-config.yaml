@@ -1,0 +1,11 @@
+# Settings the controller reads at startup (a change rolls the Deployment).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "imposm.fullname" . }}-controller
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+data:
+  network-policy.yaml: |
+    {{- include "imposm.netpolConfig" . | nindent 4 }}
+  runner-policy.yaml: |
+    {{- toYaml .Values.runnerPolicy | nindent 4 }}

@@ -1,0 +1,28 @@
+# mode=configmap: the same spec in a labelled ConfigMap (no CRD needed).
+# Status is written to the ConfigMap "monaco-status".
+# Trigger an action: kubectl annotate cm monaco imposm.johanjk.github.io/action=sync
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monaco
+  labels:
+    imposm.johanjk.github.io/sync: "true"
+data:
+  spec.yaml: |
+    source:
+      baseURL: https://download.geofabrik.de/europe/
+      pbfPath: monaco-latest.osm.pbf
+      replicationPath: monaco-updates/
+    database:
+      host: osm-rw
+      database: osm
+      user: osm
+      pgpassSecretRef:
+        name: osm-app
+        key: pgpass
+    mapping:
+      sources:
+        - configMapRef:
+            name: osm-mapping
+    storage:
+      size: 5Gi

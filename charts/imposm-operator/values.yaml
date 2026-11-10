@@ -1,0 +1,217 @@
+# -- How syncs are defined:
+#   crd:       ImposmSync resources, reconciled by the controller. The CRD comes
+#              from the separate imposm-operator-crds chart (installed once,
+#              by someone allowed to create CRDs).
+#   configmap: ConfigMaps labelled imposm.johanjk.github.io/sync=true with a
+#              spec.yaml key, reconciled by the controller (no CRD needed;
+#              status goes to <name>-status ConfigMaps)
+# The chart installs the operator only: syncs and their mapping ConfigMaps
+# are created separately (kubectl, GitOps), see examples/.
+mode: crd
+
+rbac:
+  create: true
+  # -- cluster: ClusterRole, watch all (or watchNamespace) namespaces.
+  # namespace: Role in the release namespace, watch only that namespace.
+  # The controller creates Jobs; with cluster scope its token can therefore
+  # start pods that mount any Secret in any namespace: prefer namespace
+  # scope where tenants are not trusted (see docs/design.md, trust model).
+  scope: cluster
+
+# -- Restrict the controller to one namespace (defaults to the release
+# namespace when rbac.scope=namespace).
+watchNamespace: ""
+
+image:
+  controller:
+    repository: ghcr.io/johanjk/imposm-operator
+    tag: ""            # defaults to the chart appVersion
+    pullPolicy: IfNotPresent
+  runner:
+    repository: ghcr.io/johanjk/imposm-operator-runner
+    tag: ""
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+controller:
+  replicas: 2
+  leaderElect: true
+  logLevel: info
+  resources:
+    requests: {cpu: 10m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  nodeSelector: {}
+  tolerations: []
+  # -- Default: prefer spreading the replicas over nodes.
+  affinity: {}
+  # -- Default: spread over zones when possible (ScheduleAnyway).
+  topologySpreadConstraints: []
+  priorityClassName: ""
+  podAnnotations: {}
+  podLabels: {}
+
+metrics:
+  enabled: true
+  # -- Serve metrics over HTTPS with Kubernetes authentication and
+  # authorization (scrapers need get on the /metrics non-resource URL, see
+  # the <release>-metrics-reader ClusterRole). Needs cluster-scoped RBAC
+  # (tokenreviews, subjectaccessreviews), so "auto" enables it with
+  # rbac.scope=cluster; with namespace scope metrics are plain HTTP and only
+  # reachable as the NetworkPolicy allows.
+  secure: auto
+
+serviceMonitor:
+  # -- "auto": create one when the Prometheus Operator API is installed.
+  enabled: auto
+  interval: 60s
+  labels: {}
+
+prometheusRule:
+  # -- "auto": create alerts when the Prometheus Operator API is installed.
+  enabled: auto
+  labels: {}
+  # -- Alert when data is older than this, as a Go duration (daily diffs +
+  # slack). For minutely or hourly diffs something like 30m or 3h.
+  lag: 36h
+  # -- Alert after this many failed runs in a row.
+  consecutiveFailures: 3
+  # -- Alert when the data volume has less than this fraction free.
+  storageFreeRatio: 0.1
+  # -- Alert when expire tiles wait this long for a sink (Prometheus duration).
+  expirePendingFor: 1h
+  # -- Alert when production applies no diffs for this long (Prometheus
+  # duration), e.g. paused for a re-import without disk headroom.
+  productionPausedFor: 6h
+
+podDisruptionBudget:
+  # -- Keep a controller available during voluntary disruptions (drains).
+  enabled: true
+  maxUnavailable: 1
+
+networkPolicy:
+  # -- Least-privilege NetworkPolicies for every pod of the operator: the
+  # controller, and one policy per sync for its runner pods (created by the
+  # controller). Needs a CNI that enforces
+  # NetworkPolicy.
+  enabled: true
+  # -- Restrict ingress: the controller only receives metrics and probe
+  # traffic, runner pods nothing. false: no ingress restriction (e.g. a
+  # service mesh handles it).
+  ingress: true
+  # -- Restrict egress. Controller: DNS and the Kubernetes API. Runners: DNS;
+  # the sync's database and Redis ports to networkPolicy.runner.internalTo;
+  # the upstream mirror's ports (80, 443 and any port in
+  # baseURL/replicationBaseURL) on public addresses only. false: no egress
+  # restriction.
+  egress: true
+  controller:
+    # -- Peers allowed to scrape metrics (NetworkPolicy "from" entries);
+    # empty: any pod in the cluster.
+    metricsFrom: []
+    apiServer:
+      # -- Ports of the Kubernetes API (service and control-plane ports).
+      ports: [443, 6443]
+      # -- API server addresses (CIDRs) the controller may reach, e.g. the
+      # "kubernetes" Service IP and the control-plane endpoints. Empty: those
+      # ports to any address. Pinning only fits clusters whose API addresses
+      # never change: node replacement, upgrades or a managed control plane
+      # moving cut the controller off until the values are updated.
+      cidrs: []
+  # -- DNS servers the pods may query: the cluster DNS pods in kube-system
+  # (any namespace would let a pod elsewhere pose as DNS by its label).
+  # Adjust for DNS elsewhere, e.g. OpenShift (namespace openshift-dns, pods
+  # dns.operator.openshift.io/daemonset-dns: default) or NodeLocal DNSCache
+  # (hostNetwork: an ipBlock for its address, e.g. 169.254.20.10/32).
+  dns:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  # -- Non-public IPv4 ranges, excluded from the runners' upstream rule: this
+  # network, RFC 1918, CGNAT, loopback, link-local (cloud metadata), IETF
+  # protocol assignments, TEST-NETs, 6to4 relay, benchmarking, multicast and
+  # reserved.
+  nonPublicIPv4:
+    - 0.0.0.0/8
+    - 10.0.0.0/8
+    - 100.64.0.0/10
+    - 127.0.0.0/8
+    - 169.254.0.0/16
+    - 172.16.0.0/12
+    - 192.0.0.0/24
+    - 192.0.2.0/24
+    - 192.88.99.0/24
+    - 192.168.0.0/16
+    - 198.18.0.0/15
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+    - 224.0.0.0/4
+    - 240.0.0.0/4
+  # -- Non-public IPv6 ranges: unspecified, loopback, NAT64 local use,
+  # discard, documentation, unique local, link-local, site-local and
+  # multicast. (IPv4-mapped addresses are covered by the IPv4 rule, and the
+  # API rejects ::ffff:0:0/96 in an ipBlock.)
+  nonPublicIPv6:
+    - ::/128
+    - ::1/128
+    - 64:ff9b:1::/48
+    - 100::/64
+    - 2001:db8::/32
+    - fc00::/7
+    - fe80::/10
+    - fec0::/10
+    - ff00::/8
+  runner:
+    # -- Where the sync's database and Redis ports may go (NetworkPolicy "to"
+    # entries). Default: any pod, and any address except link-local (cloud
+    # metadata): the database is usually internal and guards its own ingress.
+    # Narrow it to your database's namespace or CIDR where you can. Empty:
+    # any address.
+    internalTo:
+      - namespaceSelector: {}
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          except:
+            - 169.254.0.0/16
+      - ipBlock:
+          cidr: ::/0
+          except:
+            - fe80::/10
+    # -- Further egress rules for every runner policy (NetworkPolicy egress
+    # entries), e.g. a mirror inside the cluster or on a private address:
+    #   - ports:
+    #       - port: 8080
+    #     to:
+    #       - podSelector:
+    #           matchLabels:
+    #             app: osm-mirror
+    extraEgress: []
+
+# What a sync's spec may decide about its runner pods.
+# People who may create syncs are not trusted with everything a pod spec can
+# do: pod labels can match other NetworkPolicies' selectors or opt out of a
+# service mesh, annotations can attach extra (Multus) networks or drop an
+# AppArmor profile, NFS and inline CSI volumes reach storage the namespace
+# has no claim on, and tolerations reach reserved nodes. A spec asking for
+# more than this allows is Invalid.
+runnerPolicy:
+  # -- Prefixes runner.labels keys must start with ("*": any key).
+  allowedLabelPrefixes: []
+  # -- Prefixes runner.annotations keys must start with ("*": any key).
+  allowedAnnotationPrefixes: []
+  # -- Volume sources storage.volume and expireTiles.files.volume may use:
+  # persistentVolumeClaim, csi, nfs. (The PVC the operator creates and
+  # storage.existingClaim are always allowed.)
+  allowedVolumeTypes:
+    - persistentVolumeClaim
+  # -- Inline CSI drivers allowed when csi is (empty: any).
+  allowedCSIDrivers: []
+  # -- Let specs set runner.nodeSelector and runner.tolerations.
+  allowTenantPlacement: true
+  # -- Added to every runner pod (wins over the spec's node selector).
+  nodeSelector: {}
+  # -- Added to every runner pod.
+  tolerations: []

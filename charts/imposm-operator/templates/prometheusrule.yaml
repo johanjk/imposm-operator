@@ -1,0 +1,61 @@
+{{- if and .Values.metrics.enabled (include "imposm.promOperator" (dict "value" .Values.prometheusRule.enabled "root" .)) }}
+{{- $r := .Values.prometheusRule }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "imposm.fullname" . }}
+  labels:
+    {{- include "imposm.labels" . | nindent 4 }}
+    {{- with $r.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  groups:
+    - name: imposm-operator
+      rules:
+        - alert: ImposmSyncLagging
+          expr: imposm_sync_lag_seconds > {{ include "imposm.durationSeconds" $r.lag }}
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}} is {{`{{ $value | humanizeDuration }}`}} behind upstream"
+        - alert: ImposmSyncFailing
+          expr: imposm_sync_consecutive_failures >= {{ $r.consecutiveFailures }}
+          labels: {severity: critical}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}} failed {{`{{ $value }}`}} runs in a row"
+        - alert: ImposmSyncStorageLow
+          expr: imposm_sync_storage_total_bytes > 0 and imposm_sync_storage_available_bytes / imposm_sync_storage_total_bytes < {{ $r.storageFreeRatio }}
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: data volume almost full; grow storage.size"
+        - alert: ImposmSyncExpireTilesPending
+          expr: imposm_sync_expire_pending > 0
+          for: {{ $r.expirePendingFor }}
+          labels: {severity: warning}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: expire tiles not delivered to a sink"
+        - alert: ImposmSyncConflict
+          expr: imposm_sync_phase{phase=~"Conflict|Invalid"} == 1
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}} is {{`{{ $labels.phase }}`}}"
+        - alert: ImposmSyncProductionPaused
+          expr: imposm_sync_production_paused == 1
+          for: {{ $r.productionPausedFor }}
+          labels: {severity: warning}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: production applies no diffs ({{`{{ $labels.reason }}`}})"
+        - alert: ImposmSyncNoReimportHeadroom
+          expr: imposm_sync_reimport_headroom == 0
+          for: 1h
+          labels: {severity: info}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: a re-import would pause production; grow storage.size"
+        - alert: ImposmSyncUnusedTablesKept
+          expr: imposm_sync_unused_tables > 0
+          for: 1h
+          labels: {severity: info}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: {{`{{ $value }}`}} unused tables kept because something depends on them; see status.unusedTables"
+{{- end }}

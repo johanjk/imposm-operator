@@ -1,0 +1,3 @@
+#lø. 03. jan. 21:21:30 +0000 2026
+sequenceNumber=4653
+timestamp=2026-01-03T21\:21\:30Z

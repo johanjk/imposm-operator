@@ -1,0 +1,209 @@
+# Split from imposm3 example-mapping.yml (Apache-2.0, Omniscale).
+tables:
+  aeroways:
+    columns:
+    - name: osm_id
+      type: id
+    - name: geometry
+      type: geometry
+    - key: name
+      name: name
+      type: string
+    - name: type
+      type: mapping_value
+    mapping:
+      aeroway:
+      - runway
+      - taxiway
+    type: linestring
+  barrierpoints:
+    columns:
+    - name: osm_id
+      type: id
+    - name: geometry
+      type: geometry
+    - key: name
+      name: name
+      type: string
+    - name: type
+      type: mapping_value
+    mapping:
+      barrier:
+      - block
+      - bollard
+      - cattle_grid
+      - chain
+      - cycle_barrier
+      - entrance
+      - horse_stile
+      - gate
+      - spikes
+      - lift_gate
+      - kissing_gate
+      - fence
+      - "yes"
+      - wire_fence
+      - toll_booth
+      - stile
+    type: point
+  barrierways:
+    columns:
+    - name: osm_id
+      type: id
+    - name: geometry
+      type: geometry
+    - key: name
+      name: name
+      type: string
+    - name: type
+      type: mapping_value
+    mapping:
+      barrier:
+      - city_wall
+      - fence
+      - hedge
+      - retaining_wall
+      - wall
+      - bollard
+      - gate
+      - spikes
+      - lift_gate
+      - kissing_gate
+      - embankment
+      - "yes"
+      - wire_fence
+    type: linestring
+  roads:
+    columns:
+    - name: osm_id
+      type: id
+    - name: geometry
+      type: geometry
+    - name: type
+      type: mapping_value
+    - key: name
+      name: name
+      type: string
+    - key: tunnel
+      name: tunnel
+      type: boolint
+    - key: bridge
+      name: bridge
+      type: boolint
+    - key: oneway
+      name: oneway
+      type: direction
+    - key: ref
+      name: ref
+      type: string
+    - key: layer
+      name: z_order
+      type: wayzorder
+    - key: access
+      name: access
+      type: string
+    - key: service
+      name: service
+      type: string
+    - name: class
+      type: mapping_key
+    filters:
+      reject:
+        area:
+        - "yes"
+    mappings:
+      railway:
+        mapping:
+          railway:
+          - rail
+          - tram
+          - light_rail
+          - subway
+          - narrow_gauge
+          - preserved
+          - funicular
+          - monorail
+          - disused
+      roads:
+        mapping:
+          highway:
+          - motorway
+          - motorway_link
+          - trunk
+          - trunk_link
+          - primary
+          - primary_link
+          - secondary
+          - secondary_link
+          - tertiary
+          - tertiary_link
+          - road
+          - path
+          - track
+          - service
+          - footway
+          - bridleway
+          - cycleway
+          - steps
+          - pedestrian
+          - living_street
+          - unclassified
+          - residential
+          - raceway
+          man_made:
+          - pier
+          - groyne
+    type: linestring
+  transport_areas:
+    columns:
+    - name: osm_id
+      type: id
+    - name: geometry
+      type: geometry
+    - key: name
+      name: name
+      type: string
+    - name: type
+      type: mapping_value
+    mapping:
+      aeroway:
+      - aerodrome
+      - terminal
+      - helipad
+      - apron
+      railway:
+      - station
+      - platform
+    type: polygon
+  transport_points:
+    columns:
+    - name: osm_id
+      type: id
+    - name: geometry
+      type: geometry
+    - key: name
+      name: name
+      type: string
+    - name: type
+      type: mapping_value
+    - key: ref
+      name: ref
+      type: string
+    mapping:
+      aeroway:
+      - aerodrome
+      - terminal
+      - helipad
+      - gate
+      highway:
+      - motorway_junction
+      - turning_circle
+      - bus_stop
+      railway:
+      - station
+      - halt
+      - tram_stop
+      - crossing
+      - level_crossing
+      - subway_entrance
+    type: point

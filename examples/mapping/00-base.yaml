@@ -1,0 +1,11 @@
+# Split from imposm3 example-mapping.yml (Apache-2.0, Omniscale).
+areas:
+  area_tags:
+  - building
+  - landuse
+  - leisure
+  - natural
+  - aeroway
+  linear_tags:
+  - highway
+  - barrier

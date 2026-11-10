@@ -1,0 +1,59 @@
+# Norway and Monaco in one database: one sync per region, each in its own
+# schemas (the recommended way). A combined view per table, e.g.
+#   CREATE VIEW public.osm_roads AS
+#     SELECT * FROM norway.osm_roads UNION ALL SELECT * FROM monaco.osm_roads;
+# Alternative: one sync over europe-latest.osm.pbf with imposm.limitTo set to
+# both polygons (see docs/design.md, "Several syncs in one database").
+apiVersion: imposm.johanjk.github.io/v1alpha1
+kind: ImposmSync
+metadata:
+  name: norway
+spec:
+  source:
+    baseURL: https://download.geofabrik.de/europe/
+    pbfPath: norway-latest.osm.pbf
+    replicationPath: norway-updates/
+  database:
+    host: osm-rw
+    database: osm
+    user: osm
+    pgpassSecretRef:
+      name: osm-app
+      key: pgpass
+    schemas:
+      import: norway_import
+      production: norway
+      backup: norway_backup
+  mapping:
+    sources:
+      - configMapRef:
+          name: osm-mapping
+  storage:
+    size: 20Gi
+---
+apiVersion: imposm.johanjk.github.io/v1alpha1
+kind: ImposmSync
+metadata:
+  name: monaco
+spec:
+  source:
+    baseURL: https://download.geofabrik.de/europe/
+    pbfPath: monaco-latest.osm.pbf
+    replicationPath: monaco-updates/
+  database:
+    host: osm-rw
+    database: osm
+    user: osm
+    pgpassSecretRef:
+      name: osm-app
+      key: pgpass
+    schemas:
+      import: monaco_import
+      production: monaco
+      backup: monaco_backup
+  mapping:
+    sources:
+      - configMapRef:
+          name: osm-mapping
+  storage:
+    size: 2Gi

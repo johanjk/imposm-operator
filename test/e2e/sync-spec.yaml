@@ -1,0 +1,30 @@
+# The sync of test/e2e/run.sh, applied as an ImposmSync (crd mode) or a
+# labelled ConfigMap (configmap mode): the fixture server stands in for
+# Geofabrik and CloudNativePG provides PostGIS. Runs are triggered by the
+# test, so the schedule practically never fires.
+source:
+  baseURL: http://fx:8080/
+  pbfPath: monaco-260101.osm.pbf
+  replicationPath: monaco-updates/
+database:
+  host: osm-rw
+  database: osm
+  user: osm
+  sslMode: require
+  pgpassSecretRef: {name: osm-app, key: pgpass}
+mapping:
+  sources:
+    - configMapRef: {name: osm-mapping}
+imposm:
+  expireTiles:
+    zoom: 14
+    files:
+      volume: {persistentVolumeClaim: {claimName: expiretiles}}
+    redis:
+      url: redis://redis:6379
+schedule: "0 0 1 1 *"
+diffChunkSize: 2
+storage:
+  size: 1Gi
+runner:
+  activeDeadline: 15m

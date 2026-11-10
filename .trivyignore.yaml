@@ -1,0 +1,46 @@
+---
+misconfigurations:
+  - id: AVD-DS-0026  # docker healthcheck useless for kubernetes
+
+  - id: AVD-KSV-0110  # default namespace
+    path:
+      - charts
+
+  - id: AVD-KSV-0125  # untrusted registry
+    path:
+      - charts
+
+  - id: KSV-0020  # User set in container, not kubernetes yaml
+    path:
+      - charts
+
+  - id: KSV-0021  # Group set in container, not kubernetes yaml
+    path:
+      - charts
+
+  - id: KSV-0013  # Latest tag
+    path:
+      - charts
+
+  # The operator's own RBAC: running syncs means creating Jobs and CronJobs,
+  # rendering ConfigMaps and creating a NetworkPolicy and ServiceAccount per
+  # sync. The runner pods use the operator's image and service account.
+  # What the grant allows is wider than what the controller does: whoever
+  # holds the controller's token can create pods that mount any Secret of a
+  # namespace it covers (every namespace with rbac.scope=cluster). Documented
+  # in docs/design.md (trust model); namespace scope limits it.
+  - id: KSV-0048  # create/update workloads (jobs, cronjobs)
+    path:
+      - charts
+
+  - id: KSV-0049  # manage configmaps
+    path:
+      - charts
+
+  - id: KSV-0056  # manage networkpolicies
+    path:
+      - charts
+
+  - id: KSV-01010  # "sensitive" ConfigMap content: secret *references* (name/key), no values
+    path:
+      - charts

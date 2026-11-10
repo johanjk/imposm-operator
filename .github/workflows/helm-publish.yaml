@@ -1,0 +1,211 @@
+---
+name: Publish helm as OCI
+
+on:  # yamllint disable-line rule:truthy
+  workflow_call:
+    inputs:
+      chart-dir:
+        required: false
+        type: string
+        default: "./charts"
+      publish:
+        description: "Publish the charts after linting, else only lint"
+        required: false
+        type: boolean
+        default: true
+      registry:
+        description: "OCI registry path to publish to, default ghcr.io/<owner>/helm"
+        required: false
+        type: string
+        default: ""
+      kube-version:
+        description: "Kubernetes version the charts are rendered and checked for"
+        required: false
+        type: string
+        default: "1.35.7"
+      name-template:
+        description: "Release name the charts are rendered with"
+        required: false
+        type: string
+        default: "foo"
+
+permissions: {}
+
+jobs:
+  discover-charts:
+    name: Discover charts
+
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    outputs:
+      chart_matrix: ${{ steps.set-matrix.outputs.chart_matrix }}
+      lint_matrix: ${{ steps.set-matrix.outputs.lint_matrix }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: set-matrix
+        env:
+          BASE_DIR: ${{ inputs.chart-dir }}
+        run: |
+          dirs=$(find "$BASE_DIR" -type f -name "Chart.yaml" \
+            -exec dirname {} \; \
+            | sort -u \
+            | jq -R -s -c 'split("\n")[:-1]')
+          echo "chart_matrix={\"dir\":$dirs}" >> "$GITHUB_OUTPUT"
+
+          matrix=$(
+            find "$BASE_DIR" -type f -path '*/ci/*.yaml' |
+            jq -R -s -c '
+              split("\n")[:-1]
+              | map({
+                  chart: (. | sub("/ci/.*$"; "")),
+                  values: .
+                })
+              | {include: .}
+            '
+          )
+
+          echo "lint_matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Charts detected"
+            echo
+            echo "### Publish"
+            if jq -e 'length > 0' >/dev/null <<< "$dirs"; then
+              jq -r '.[] | "- `\(.)`"' <<< "$dirs"
+            else
+              echo "- None"
+            fi
+            echo
+            echo "### Lint"
+            if jq -e '.include | length > 0' >/dev/null <<< "$matrix"; then
+              jq -r '.include[] | "- `\(.chart)` using `\(.values)`"' <<< "$matrix"
+            else
+              echo "- None"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    name: "Lint rendered chart"
+
+    permissions:
+      contents: read
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - discover-charts
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-charts.outputs.lint_matrix) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint chart
+        uses: $/.github/actions/kube-lint
+        with:
+          file: ${{ matrix.chart }}
+          renderer: helm
+          flags: "--name-template ${{ inputs.name-template }}"
+          values_file: ${{ matrix.values }}
+          kube_version: ${{ inputs.kube-version }}
+
+  publish:
+    name: "Publish helm charts"
+
+    if: inputs.publish
+
+    permissions:
+      contents: read
+      packages: write  # needed for ghcr access
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - discover-charts
+      - lint
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover-charts.outputs.chart_matrix) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Registry
+        id: registry
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          # oci references must be lowercase
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          registry="${REGISTRY:-ghcr.io/${OWNER,,}/helm}"
+          echo "path=$registry" >> "$GITHUB_OUTPUT"
+          echo "host=${registry%%/*}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to the registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ steps.registry.outputs.host }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inject oci labels
+        env:
+          CHART: ${{ matrix.dir }}
+          SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          yq -i '.annotations["org.opencontainers.image.source"] = strenv(SOURCE)' "$CHART/Chart.yaml"
+
+      - name: Package Chart
+        id: package
+        env:
+          CHART: ${{ matrix.dir }}
+        run: |
+          helm dependency build "$CHART"
+          chart_package=$(
+            helm package "$CHART" \
+            | sed -n 's/^Successfully packaged chart and saved it to: //p'
+          )
+          echo "chart=$chart_package" >> "$GITHUB_OUTPUT"
+
+      - name: Publish chart
+        env:
+          PKG: ${{ steps.package.outputs.chart }}
+          REGISTRY: ${{ steps.registry.outputs.path }}
+        run: |
+          chart_name=$(helm show chart "$PKG" | awk '$1 == "name:" {print $2}')
+          chart_version=$(helm show chart "$PKG" | awk '$1 == "version:" {print $2}')
+          chart_ref="oci://$REGISTRY/$chart_name"
+          publish_result="publishing"
+
+          if helm show chart "$chart_ref" --version "$chart_version" >/dev/null 2>&1; then
+            echo "Chart tag already exists: $chart_ref:$chart_version" >&2
+            publish_result="rejected because the tag already exists"
+          fi
+
+          {
+            echo "### Chart publish"
+            echo "- Chart: $chart_name"
+            echo "- Tag: $chart_version"
+            echo "- Result: $publish_result"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$publish_result" == "publishing" ]]; then
+            helm push "$PKG" "oci://$REGISTRY"
+          fi

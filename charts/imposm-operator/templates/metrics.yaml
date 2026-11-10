@@ -1,0 +1,75 @@
+{{- if .Values.metrics.enabled }}
+{{- $secure := eq (include "imposm.metricsSecure" .) "true" }}
+{{- $name := include "imposm.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-metrics
+  labels:
+    {{- include "imposm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  selector: {{- include "imposm.controllerSelector" . | nindent 4 }}
+  ports:
+    - {name: metrics, port: {{ include "imposm.metricsPort" . }}, targetPort: metrics}
+{{- if $secure }}
+---
+# The controller authenticates scrapers with TokenReviews and authorizes
+# them with SubjectAccessReviews.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-metrics-auth
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-metrics-auth
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-metrics-auth}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+---
+# Bind this to your Prometheus' ServiceAccount to let it scrape.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-metrics-reader
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+rules:
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
+{{- end }}
+{{- if include "imposm.promOperator" (dict "value" .Values.serviceMonitor.enabled "root" .) }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "imposm.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: imposm-operator
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: controller
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      {{- if $secure }}
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig: {insecureSkipVerify: true}   # the controller's self-signed serving certificate
+      {{- end }}
+{{- end }}
+{{- end }}

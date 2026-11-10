@@ -1,0 +1,3 @@
+#on. 07. jan. 21:21:30 +0000 2026
+sequenceNumber=4657
+timestamp=2026-01-07T21\:21\:30Z

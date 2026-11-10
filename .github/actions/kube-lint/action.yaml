@@ -1,0 +1,456 @@
+---
+name: Lint kubernetes objects
+# yamllint disable rule:line-length
+description: |
+  Check that kubernetes objects are properly rendered, valid and following best practices.
+  Does:
+    validity:
+      - yq parsable (raw)
+      - yq parsable (rendered)
+      - yamllint (raw)
+      - yamllint (rendered)
+      - flux-schema (rendered)
+    best practices:
+      - kube-linter (rendered)
+      - trivy (rendered)
+      - trivy (if chart)
+      - typos
+      - helm lint (if chart)
+# yamllint enable rule:line-length
+
+inputs:
+  file:
+    description: "File or folder where yaml manifests exist"
+    required: true
+  renderer:
+    description: "'kustomize' or 'helm'"
+    required: false
+    default: "kustomize"
+  flags:
+    description: "Flags passed to to the renderer, ('helm template' or 'kustomize build'.)"
+    required: false
+    default: ""
+  values_file:
+    description: "Values file passed to helm template (preferred over passing `--values` to `flags`)"
+    required: false
+    default: ""
+  kube_version:
+    description: "Kubernetes version to evaluate rules against"
+    required: false
+    default: "1.35.7"
+  pedantic:
+    description: "Fail if yamllint detects any warnings."
+    required: false
+    default: "false"
+  kube_linter_config:
+    description: "kube-linter config merged over the defaults, if the file exists"
+    required: false
+    default: ".kube-linter.yaml"
+  typos_config:
+    description: "typos config, if the file exists"
+    required: false
+    default: "typos.toml"
+  trivy_severity:
+    description: "Trivy severities that fail the check"
+    required: false
+    default: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+
+runs:
+  using: composite
+
+  steps:
+    - name: Setup Helm
+      if: inputs.renderer == 'helm'
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+    - name: Setup Flux CLI
+      uses: fluxcd/flux2/action@3fa784edd773d56630bb9f62645e08f70c2cff0a # v2.10.0
+
+    - name: Check runner tools
+      shell: bash
+      env:
+        renderer: ${{ inputs.renderer }}
+      run: |
+        # Preinstalled on GitHub's ubuntu runners, not necessarily elsewhere.
+        needed=(yq)
+        if [ "$renderer" = "kustomize" ]; then
+          needed+=(kustomize)
+        fi
+        for tool in "${needed[@]}"; do
+          if ! command -v "$tool" >/dev/null; then
+            echo "::error::$tool is required on the runner"
+            exit 1
+          fi
+        done
+
+    - name: Install yamllint + typos
+      shell: bash
+      run: |
+        uv tool install yamllint==1.38.0
+        uv tool install typos==1.52.0
+
+    - name: Run yq
+      shell: bash
+      env:
+        file: ${{ inputs.file }}
+      run: |
+        output="$(
+          if [ -f "$file" ]; then
+            yq "$file" 2>&1
+
+          elif [ -d "$file" ]; then
+            find "$file" -type f \( -name '*.yaml' -o -name '*.yml' \) \
+              -print0 \
+              | xargs -0 -n1 yq
+          fi
+        )" || status=$?
+
+        if [ -n "$status" ]; then
+          "$GITHUB_ACTION_PATH/report.sh" "yq failed (raw)" "$output"
+          exit "$status"
+        fi
+      if: inputs.renderer != 'helm'
+
+    - name: Run yamllint
+      shell: bash
+      env:
+        file: ${{ inputs.file }}
+        pedantic: ${{ inputs.pedantic }}
+      run: |
+        output="$(yamllint "$file" --strict --format standard --config-data "
+        ---
+        extends: default
+
+        rules:
+          # Kustomize often uses comments to explain patches
+          comments:
+            min-spaces-from-content: 1
+        " 2>&1)" || status=$?
+
+        if [ -n "$status" ]; then
+          has_warnings=$(grep -Ec '(^|[[:space:]])warning([[:space:]]|:)' <<< "$output" || true)
+          has_errors=$(grep -Ec '(^|[[:space:]])error([[:space:]]|:)' <<< "$output" || true)
+
+          {
+            echo "## yamllint failed (raw)"
+            echo "- Path: \`$file\`"
+            echo ""
+
+            if [ "$has_errors" -gt 0 ]; then
+              echo "### Errors"
+            elif [ "$has_warnings" -gt 0 ]; then
+              echo "### Warnings"
+            else
+              echo "### Issues"
+            fi
+            echo '```text'
+            printf '%s\n' "$output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$pedantic" = "true" ]; then
+            exit $status
+          fi
+        fi
+      if: inputs.renderer != 'helm'
+
+    - id: render
+      name: Render yaml
+      shell: bash
+      env:
+        file: ${{ inputs.file }}
+        renderer: ${{ inputs.renderer }}
+        flags: ${{ inputs.flags }}
+        values_file: ${{ inputs.values_file }}
+        kube_version: ${{ inputs.kube_version }}
+      # yamllint disable rule:line-length
+      run: |
+        tmpfile="$(mktemp --suffix=.yaml)"
+        artifact_path="$(printf '%s' "${file#./}" | sed -E 's#[/\\\\:"<>|*?]#-#g')"
+        case "$renderer" in
+          "kustomize")
+            kustomize build "$file" --load-restrictor LoadRestrictionsNone $flags > "$tmpfile"
+            ;;
+          "helm")
+            helm dependency build "$file"
+            helm_args=(template --kube-version "$kube_version")
+            if [ -n "$values_file" ]; then
+              helm_args+=(--values "$values_file")
+            fi
+            helm_args+=( $flags "$file" )
+            helm "${helm_args[@]}" > "$tmpfile"
+            if [ -n "$values_file" ]; then
+              values_path="$(printf '%s' "${values_file#./}" | sed -E 's#[/\\\\:"<>|*?]#-#g')"
+              artifact_path="${artifact_path}-${values_path}"
+            fi
+            ;;
+          *)
+            echo "unsupported renderer $renderer"
+            exit 1
+            ;;
+        esac
+        echo "file=${tmpfile}" >> "$GITHUB_OUTPUT"
+        echo "artifact_name=$artifact_path" >> "$GITHUB_OUTPUT"
+      # yamllint enable rule:line-length
+
+    # - name: Upload rendered yaml artifact
+    #   uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+    #   with:
+    #     name: ${{ steps.render.outputs.artifact_name }}
+    #     path: ${{ steps.render.outputs.file }}
+    #     retention-days: 1
+
+    - name: Run yamllint (rendered)
+      shell: bash
+      env:
+        file: ${{ steps.render.outputs.file }}
+        renderer: ${{ inputs.renderer }}
+        pedantic: ${{ inputs.pedantic }}
+      run: |
+        case "$renderer" in
+          "kustomize")
+            output="$(yamllint "$file" --strict --config-data "
+        # Indent here is weird due to indent handling in gh action
+        ---
+        extends: default
+
+        rules:
+          line-length:
+            max: 120
+            level: warning
+          # Kustomize often uses comments to explain patches
+          comments:
+            min-spaces-from-content: 1
+          # Kustomize files are often dense, allow 2-space indentation
+          indentation:
+            spaces: consistent
+            indent-sequences: false
+          document-start: disable
+        " 2>&1)" || status=$?
+            ;;
+          "helm")
+            output="$(yamllint "$file" --strict --config-data "
+        # Indent here is weird due to indent handling in gh action
+        ---
+        extends: default
+
+        rules:
+          line-length:
+            level: warning
+          indentation:
+            level: warning
+          trailing-spaces:
+            level: warning
+        " 2>&1)" || status=$?
+            ;;
+          *)
+            output="$(yamllint "$file" --strict 2>&1)" || status=$?
+            ;;
+        esac
+
+        if [ "$status" -ge 1 ]; then
+          has_warnings=$(grep -c '^::warning' <<< "$output" || true)
+          has_errors=$(grep -c '^::error' <<< "$output" || true)
+
+          {
+            echo "## yamllint issues (rendered)"
+            echo ""
+
+            if [ "$has_errors" -gt 0 ]; then
+              echo "### Errors"
+            elif [ "$has_warnings" -gt 0 ]; then
+              echo "### Warnings"
+            else
+              echo "### Issues"
+            fi
+            echo '```text'
+            sed -E '
+              /^::group::/d;
+              /^::endgroup::/d;
+              s/^::([a-zA-Z]+) file=[^:]+,line=([0-9]+),col=([0-9]+)::/\1: \2:\3 /
+            ' <<< "$output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        if [ "$status" -ge 1 ] && [ "$pedantic" = "true" ]; then
+          exit $status
+        fi
+
+    - name: Helm lint
+      shell: bash
+      env:
+        file: ${{ inputs.file }}
+      run: |
+        helm lint "$file"
+      if: inputs.renderer == 'helm'
+
+    - name: Install flux schema
+      shell: bash
+      run: |
+        flux plugin install schema@0.17.0
+
+    - name: Run flux-schema (rendered)
+      shell: bash
+      env:
+        file: ${{ steps.render.outputs.file }}
+        kube_version: ${{ inputs.kube_version }}
+      run: |
+        output="$(flux schema validate "$file" \
+          -s  "https://schemas.fluxoperator.dev/catalog/versions/kubernetes/v${kube_version%.*}" \
+          -s ecosystem \
+          -s 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.Kind}}_{{.Version}}.json' \
+          --verbose \
+          --skip-missing-schemas 2>&1)" || status=$?
+
+        if [ -n "$status" ]; then
+          "$GITHUB_ACTION_PATH/report.sh" "flux-schema failed" "$output"
+          exit "$status"
+        fi
+
+    - id: kube-linter-config
+      name: Detect kube-linter config
+      shell: bash
+      env:
+        config: ${{ inputs.kube_linter_config }}
+      run: |
+        default="$(mktemp --suffix=.yaml)"
+
+        cat <<EOF > "$default"
+        ---
+        checks:
+          addAllBuiltIn: true
+          doNotAutoAddDefaults: false
+          exclude:
+            - schema-validation
+            - sorted-keys
+            - dnsconfig-options
+            - required-annotation-email
+            - required-label-owner
+        EOF
+
+        if [ -f "$config" ]; then
+          merged="$(mktemp --suffix=.yaml)"
+          yq eval-all '
+            . as $item ireduce ({}; . *+ $item)
+            | .checks.exclude |= unique
+          ' "$config" "$default" > "$merged"
+          echo "config=$merged" >> "$GITHUB_OUTPUT"
+        else
+          echo "config=$default" >> "$GITHUB_OUTPUT"
+        fi
+
+    - id: kube-linter
+      name: Kube-linter (rendered)
+      # yamllint disable rule:line-length
+      uses: stackrox/kube-linter-action@87802a2f4e01abebb3ee3c67a3002fea71f6eae5 # v1.0.7
+      # yamllint enable rule:line-length
+      continue-on-error: true
+      with:
+        directory: '${{ steps.render.outputs.file }}'
+        config: ${{ steps.kube-linter-config.outputs.config }}
+        output-file: kube-linter-report.txt
+
+    - name: Summarize kube-linter result
+      if: steps.kube-linter.outcome == 'failure'
+      shell: bash
+      run: |
+        {
+          echo "## kube-linter failed"
+          echo ""
+          if [ -s kube-linter-report.txt ]; then
+            echo "### Issues"
+            echo "*You can ignore issues by [creating](https://docs.kubelinter.io/#/configuring-kubelinter?id=run-specific-checks) a \`.kube-linter.yaml\` file at the root of your project, or by [annotation](https://docs.kubelinter.io/#/configuring-kubelinter?id=ignoring-violations-for-specific-cases) on the object \`ignore-check.kube-linter.io/<check-name>: <reason>\`*"
+            echo '```text'
+            sed -E '
+              /^\s*$/d;
+              s|^[^:]+:\s*||
+              s/\) /\)\n  /
+            ' kube-linter-report.txt
+            echo '```'
+          else
+            echo "No actionable issues reported"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit 1
+
+    - name: Setup Trivy
+      uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+      with:
+        version: "v0.71.0"
+
+    - name: Run Trivy config scanner (rendered)
+      shell: bash
+      env:
+        file: ${{ steps.render.outputs.file }}
+        kube_version: ${{ inputs.kube_version }}
+        severity: ${{ inputs.trivy_severity }}
+      run: |
+        output="$(trivy config "$file" \
+          --severity "$severity" \
+          --format table \
+          --k8s-version "$kube_version" \
+          --exit-code 1)" || status=$?
+
+        if [ -n "$status" ]; then
+          "$GITHUB_ACTION_PATH/report.sh" "Trivy Scan Results (rendered)" "$(sed -n '/^┌/,$p' <<< "$output")"
+          exit "$status"
+        fi
+
+    - name: Run Trivy config scanner (chart)
+      shell: bash
+      env:
+        file: ${{ inputs.file }}
+        kube_version: ${{ inputs.kube_version }}
+        severity: ${{ inputs.trivy_severity }}
+      run: |
+        output="$(trivy config "$file" \
+          --severity "$severity" \
+          --format table \
+          --k8s-version "$kube_version" \
+          --helm-kube-version "$kube_version" \
+          --exit-code 1)" || status=$?
+
+        if [ -n "$status" ]; then
+          "$GITHUB_ACTION_PATH/report.sh" "Trivy Scan Results (helm)" "$(sed -n '/^┌/,$p' <<< "$output")"
+          exit "$status"
+        fi
+      if: inputs.renderer == 'helm'
+
+    - name: Spell Check (rendered)
+      shell: bash
+      env:
+        file: ${{ steps.render.outputs.file }}
+        config: ${{ inputs.typos_config }}
+      run: |
+        args=()
+        if [ -f "$config" ]; then
+          args=(--config "$config")
+        fi
+
+        output="$(typos --no-check-filenames "${args[@]}" "$file" 2>&1)" || status=$?
+        if [ -n "$status" ]; then
+          "$GITHUB_ACTION_PATH/report.sh" "Typos" "$output" \
+            "You can ignore typos by [creating](https://github.com/crate-ci/typos#false-positives) a \`$config\`"
+          exit 1
+        fi
+
+    - name: Show yaml on fail (rendered)
+      if: ${{ failure() && steps.render.outputs.file != '' }}
+      shell: bash
+      env:
+        file: ${{ steps.render.outputs.file }}
+      run: |
+        {
+          echo "## Rendered yaml"
+          echo "<details>"
+          echo ""
+          echo "<summary>Show yaml</summary>"
+          echo ""
+          echo '```yaml'
+          yq "$file"
+          echo '```'
+          echo ""
+          echo '</details>'
+        } >> "$GITHUB_STEP_SUMMARY"

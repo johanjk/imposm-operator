@@ -1,0 +1,16 @@
+---
+# Operator for labelled ConfigMaps across the cluster, with secure metrics,
+# alerts and a pinned API server address.
+mode: configmap
+rbac:
+  scope: cluster
+serviceMonitor:
+  enabled: true
+prometheusRule:
+  enabled: true
+  lag: 3h
+networkPolicy:
+  controller:
+    apiServer:
+      cidrs:
+        - 10.96.0.1/32

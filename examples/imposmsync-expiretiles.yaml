@@ -1,0 +1,40 @@
+# mode=crd: an ImposmSync with expire tiles: imposm's standard expire-tile
+# files on a shared PVC and a Redis stream in zaptiles' format.
+apiVersion: imposm.johanjk.github.io/v1alpha1
+kind: ImposmSync
+metadata:
+  name: monaco
+spec:
+  source:
+    baseURL: https://download.geofabrik.de/europe/
+    pbfPath: monaco-latest.osm.pbf
+    replicationPath: monaco-updates/
+  database:
+    host: osm-rw
+    database: osm
+    user: osm
+    pgpassSecretRef:
+      name: osm-app
+      key: pgpass
+  mapping:
+    sources:
+      - configMapRef:
+          name: osm-mapping
+  imposm:
+    # Tiles to invalidate: imposm's standard expire files on a shared PVC (for
+    # any tool that reads them), and a Redis stream in zaptiles' format.
+    expireTiles:
+      zoom: 14
+      files:
+        volume:
+          persistentVolumeClaim:
+            claimName: imposm-expiretiles   # ReadWriteMany, shared with the readers
+      redis:
+        urlSecretRef:
+          name: redis-credentials
+          key: url   # e.g. redis://:password@redis:6379
+        stream: expiretiles
+        field: tiles
+        maxLen: 100000
+  storage:
+    size: 5Gi

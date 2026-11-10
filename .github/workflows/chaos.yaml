@@ -1,0 +1,45 @@
+name: chaos
+# Real Postgres + the real imposm runner image under faults. Slow (builds the
+# runner image, compiling imposm), so only when something they exercise
+# changes: everything `go list -tags chaos -test -deps ./internal/chaos`
+# reaches, plus the runner image and the fixtures. The controller, chart, docs
+# and examples are not in it.
+on:
+  push:
+    branches: [master]
+    paths: &paths
+      - .github/workflows/chaos.yaml
+      - Makefile
+      - go.mod
+      - go.sum
+      - api/**
+      - cmd/**
+      - containers/runner.dockerfile
+      - containers/patches/**
+      - hack/tablesums/**
+      - hack/expirecheck/**
+      - internal/**
+      - "!internal/controller/**"
+      - test/fixtures/**
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: chaos-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chaos:
+    name: chaos suites
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go.mod}
+      - run: make chaos-orchestration
+      - run: make chaos-imposm

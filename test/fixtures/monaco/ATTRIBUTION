@@ -1,0 +1,7 @@
+Map data © OpenStreetMap contributors, available under the Open Database
+License (ODbL) v1.0: https://www.openstreetmap.org/copyright
+
+Extracts by Geofabrik GmbH (https://download.geofabrik.de/).
+The files under monaco-updates/ are derived from monaco-260101.osm.pbf and the
+2026-11-07 monaco-latest.osm.pbf with osmium derive-changes, split into
+10 consecutive change files by hack/splitosc. Their timestamps are synthetic.

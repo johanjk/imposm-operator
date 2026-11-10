@@ -1,0 +1,3 @@
+#fr. 09. jan. 21:21:30 +0000 2026
+sequenceNumber=4659
+timestamp=2026-01-09T21\:21\:30Z

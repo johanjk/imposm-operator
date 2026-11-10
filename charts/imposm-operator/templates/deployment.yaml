@@ -1,0 +1,122 @@
+{{- include "imposm.validate" . }}
+{{- $ns := include "imposm.watchNamespace" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "imposm.fullname" . }}
+  labels: {{- include "imposm.labels" . | nindent 4 }}
+  annotations:
+    ignore-check.kube-linter.io/no-node-affinity: >-
+      Runs on any node; replicas are spread by pod anti-affinity and topology
+      spread (controller.affinity, controller.nodeSelector to restrict).
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # a new pod first: leader election hands over without a gap
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: imposm-operator
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "imposm.labels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+        {{- with .Values.controller.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        checksum/network-policy: {{ include "imposm.netpolConfig" . | sha256sum | trunc 16 }}
+        checksum/runner-policy: {{ toYaml .Values.runnerPolicy | sha256sum | trunc 16 }}
+        {{- with .Values.controller.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "imposm.fullname" . }}
+      restartPolicy: Always
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: controller
+          image: {{ include "imposm.controllerImage" . }}
+          imagePullPolicy: {{ .Values.image.controller.pullPolicy }}
+          args:
+            - controller
+            - --source={{ .Values.mode }}
+            - --runner-image={{ include "imposm.runnerImage" . }}
+            - --runner-image-pull-policy={{ .Values.image.runner.pullPolicy }}
+            {{- with .Values.imagePullSecrets }}
+            - --runner-image-pull-secrets={{ range $i, $s := . }}{{ if $i }},{{ end }}{{ $s.name }}{{ end }}
+            {{- end }}
+            - --leader-elect={{ .Values.controller.leaderElect }}
+            - --leader-election-namespace={{ .Release.Namespace }}
+            {{- if .Values.metrics.enabled }}
+            - --metrics-bind-address=:{{ include "imposm.metricsPort" . }}
+            - --metrics-secure={{ include "imposm.metricsSecure" . }}
+            {{- else }}
+            - --metrics-bind-address=0
+            {{- end }}
+            {{- if $ns }}
+            - --namespace={{ $ns }}
+            {{- end }}
+            {{- if and .Values.networkPolicy.enabled (or .Values.networkPolicy.ingress .Values.networkPolicy.egress) }}
+            - --network-policy-config=/etc/imposm-operator-controller/network-policy.yaml
+            - --runner-policy-config=/etc/imposm-operator-controller/runner-policy.yaml
+            {{- end }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.controller.logLevel | quote }}
+          ports:
+            - {name: metrics, containerPort: {{ include "imposm.metricsPort" . }}}
+            - {name: probes, containerPort: 8081}
+          livenessProbe:
+            httpGet: {path: /healthz, port: probes}
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet: {path: /readyz, port: probes}
+          resources: {{- toYaml .Values.controller.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/imposm-operator-controller, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "imposm.fullname" . }}-controller}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      affinity:
+        {{- if .Values.controller.affinity }}
+        {{- toYaml .Values.controller.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {{- include "imposm.controllerSelector" . | nindent 20 }}
+        {{- end }}
+      topologySpreadConstraints:
+        {{- if .Values.controller.topologySpreadConstraints }}
+        {{- toYaml .Values.controller.topologySpreadConstraints | nindent 8 }}
+        {{- else }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "imposm.controllerSelector" . | nindent 14 }}
+        {{- end }}

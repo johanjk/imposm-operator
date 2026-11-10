@@ -1,0 +1,14 @@
+# kubectl apply -k examples/mapping  -> ConfigMap "osm-mapping", one key per part.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: osm-mapping
+    files:
+      - 00-base.yaml
+      - 10-roads.yaml
+      - 20-buildings.yaml
+      - 30-landuse.yaml
+      - 40-places.yaml
+      - 90-generalized.yaml

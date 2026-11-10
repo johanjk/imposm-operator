@@ -1,0 +1,12 @@
+/bin/
+/dist/
+*.test
+*.out
+cover.html
+/testbin/
+.idea/
+*.swp
+# fixtures are committed; derived variants are generated
+/test/fixtures/*/derived/
+/test/e2e/.kubeconfig
+/build/

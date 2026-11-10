@@ -1,0 +1,6 @@
+apiVersion: v2
+name: imposm-operator-crds
+description: The ImposmSync CRD for imposm-operator (mode=crd). Installed once per cluster by an admin; the imposm-operator chart itself needs no cluster-scoped rights.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
