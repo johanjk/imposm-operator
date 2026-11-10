@@ -155,23 +155,15 @@ func Validate(s *v1.ImposmSyncSpec, p *field.Path) field.ErrorList {
 		add(field.NotSupported(sp.Child("checksum"), s.Source.Checksum, []string{"md5", "none"}))
 	}
 
-	// database
+	// database: host, database and user may come from secretRef (checked
+	// by the runner with ValidateConnection once it has read the Secret)
 	dp := p.Child("database")
-	if s.Database.Host == "" || strings.ContainsAny(s.Database.Host, " /?#@") && !strings.HasPrefix(s.Database.Host, "/") {
-		add(field.Invalid(dp.Child("host"), s.Database.Host, "must be a host name, IP or socket directory"))
-	}
+	errs = append(errs, ValidateConnection(dp, &s.Database, s.Database.SecretRef != nil)...)
 	if s.Database.Port < 1 || s.Database.Port > 65535 {
 		add(field.Invalid(dp.Child("port"), s.Database.Port, "must be 1-65535"))
 	}
-	// No spaces, quotes, backslashes or "=": imposm reads options (such as
-	// prefix=) from the same connection string.
-	for name, v := range map[string]string{"database": s.Database.Database, "user": s.Database.User} {
-		if v == "" || len(v) > 63 || strings.ContainsAny(v, "\x00\n\r\t '\"\\=") {
-			add(field.Invalid(dp.Child(name), v, "must be 1-63 characters without spaces, quotes, backslashes or '='"))
-		}
-	}
-	if !slices.Contains([]string{"disable", "require", "verify-ca", "verify-full"}, s.Database.SSLMode) {
-		add(field.NotSupported(dp.Child("sslMode"), s.Database.SSLMode, []string{"disable", "require", "verify-ca", "verify-full"}))
+	if ref := s.Database.SecretRef; ref != nil && !validName(ref.Name) {
+		add(field.Invalid(dp.Child("secretRef", "name"), ref.Name, "must be a valid Secret name"))
 	}
 	if s.Database.PasswordSecretRef != nil && s.Database.PgpassSecretRef != nil {
 		add(field.Forbidden(dp.Child("pgpassSecretRef"), "set at most one of passwordSecretRef and pgpassSecretRef"))
@@ -367,6 +359,34 @@ func Validate(s *v1.ImposmSyncSpec, p *field.Path) field.ErrorList {
 		if e.Redis > 0 && slices.Contains(e.Upstream, e.Redis) {
 			add(field.Invalid(p.Child("imposm", "expireTiles", "redis", "url"), e.Redis, "the Redis port must differ from the upstream ports (80, 443 and the ports in the source URLs)"))
 		}
+	}
+	return errs
+}
+
+// sslModes are the libpq sslmode values the operator accepts.
+var sslModes = []string{"disable", "require", "verify-ca", "verify-full"}
+
+// ValidateConnection checks the connection fields of d. With fromSecret,
+// empty host, database and user are allowed (the Secret supplies them).
+func ValidateConnection(dp *field.Path, d *v1.DatabaseSpec, fromSecret bool) field.ErrorList {
+	var errs field.ErrorList
+	if d.Host != "" || !fromSecret {
+		if d.Host == "" || strings.ContainsAny(d.Host, " /?#@") && !strings.HasPrefix(d.Host, "/") {
+			errs = append(errs, field.Invalid(dp.Child("host"), d.Host, "must be a host name, IP or socket directory"))
+		}
+	}
+	// No spaces, quotes, backslashes or "=": imposm reads options (such as
+	// prefix=) from the same connection string.
+	for _, f := range []struct{ name, v string }{{"database", d.Database}, {"user", d.User}} {
+		if f.v == "" && fromSecret {
+			continue
+		}
+		if f.v == "" || len(f.v) > 63 || strings.ContainsAny(f.v, "\x00\n\r\t '\"\\=") {
+			errs = append(errs, field.Invalid(dp.Child(f.name), f.v, "must be 1-63 characters without spaces, quotes, backslashes or '='"))
+		}
+	}
+	if !slices.Contains(sslModes, d.SSLMode) {
+		errs = append(errs, field.NotSupported(dp.Child("sslMode"), d.SSLMode, sslModes))
 	}
 	return errs
 }

@@ -135,6 +135,13 @@ func podTemplate(s *Sync, source, image string, action string, specHash string) 
 	if ref := sp.Database.PasswordSecretRef; ref != nil {
 		secret(ref, runner.SecretPassword, runner.EnvPasswordFile)
 	}
+	if ref := sp.Database.SecretRef; ref != nil {
+		volumes = append(volumes, corev1.Volume{Name: "database", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: ref.Name, DefaultMode: ptr.To[int32](0o440), // group-readable through fsGroup
+		}}})
+		mounts = append(mounts, corev1.VolumeMount{Name: "database", MountPath: runner.DatabaseSecretDir, ReadOnly: true})
+		args = append(args, "--database-secret-dir", runner.DatabaseSecretDir)
+	}
 	if ref := sp.Database.PgpassSecretRef; ref != nil {
 		secret(ref, runner.SecretPgpass, "PGPASSFILE")
 		args = append(args, "--pgpass-allow-group-readable")

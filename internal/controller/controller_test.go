@@ -373,6 +373,9 @@ func TestExpireTilesRendering(t *testing.T) {
 		!strings.Contains(strings.Join(c.Args, " "), "--expiretiles-dir /expiretiles") {
 		t.Fatalf("container: mounts=%+v env=%v files=%v args=%v", c.VolumeMounts, env, files, c.Args)
 	}
+	if slices.Contains(c.Args, "--database-secret-dir") {
+		t.Fatal("no database secret without secretRef")
+	}
 	// the apiserver rejects a redis spec with both url and urlSecretRef
 	bad := s.DeepCopy()
 	bad.Imposm.ExpireTiles.Redis.URL = "redis://redis:6379"
@@ -994,4 +997,40 @@ func TestNameTakenNotAdopted(t *testing.T) {
 	eventually(t, "cronjob after the name is free", func() bool {
 		return k8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: "taken-imposm"}, &cj) == nil
 	})
+}
+
+// database.secretRef is mounted for the runner; host, database and user may
+// then be left out, and the apiserver requires them otherwise.
+func TestDatabaseSecretRef(t *testing.T) {
+	ctx := context.Background()
+	ns := newNS(t)
+	mappingCM(t, ns)
+	s := testSpec()
+	s.Database.Host, s.Database.Database, s.Database.User = "", "", ""
+	s.Database.SecretRef = &corev1.LocalObjectReference{Name: "osm-db"}
+	if err := k8s.Create(ctx, &v1.ImposmSync{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "monaco"}, Spec: s}); err != nil {
+		t.Fatal(err)
+	}
+	var cj batchv1.CronJob
+	eventually(t, "cronjob", func() bool {
+		return k8s.Get(ctx, types.NamespacedName{Namespace: ns, Name: "monaco-imposm"}, &cj) == nil
+	})
+	pod := cj.Spec.JobTemplate.Spec.Template.Spec
+	c := pod.Containers[0]
+	var vol, mount bool
+	for _, v := range pod.Volumes {
+		vol = vol || v.Name == "database" && v.Secret != nil && v.Secret.SecretName == "osm-db"
+	}
+	for _, m := range c.VolumeMounts {
+		mount = mount || m.Name == "database" && m.MountPath == "/var/run/secrets/imposm-operator-database" && m.ReadOnly
+	}
+	if !vol || !mount || !strings.Contains(strings.Join(c.Args, " "), "--database-secret-dir /var/run/secrets/imposm-operator-database") {
+		t.Fatalf("volumes=%+v mounts=%+v args=%v", pod.Volumes, c.VolumeMounts, c.Args)
+	}
+	bad := testSpec()
+	bad.Database.Host = ""
+	err := k8s.Create(ctx, &v1.ImposmSync{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "no-host"}, Spec: bad})
+	if err == nil || !strings.Contains(err.Error(), "host, database and user are required without secretRef") {
+		t.Fatalf("got %v", err)
+	}
 }

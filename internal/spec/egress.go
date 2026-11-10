@@ -17,7 +17,8 @@ const DefaultRedisPort = 6379
 // spec for the per-sync NetworkPolicy. Ports, not hosts: NetworkPolicy cannot
 // match DNS names, and the services behind them guard their own ingress.
 type EgressPorts struct {
-	// Database is database.port; 0 for a Unix socket directory.
+	// Database is database.port; 0 for a Unix socket directory (unless
+	// database.secretRef may name a TCP host).
 	Database int32
 	// Redis is the expire-tile Redis port; 0 without a Redis sink.
 	Redis int32
@@ -29,7 +30,9 @@ type EgressPorts struct {
 // Egress derives the egress ports of a defaulted, valid spec.
 func Egress(s *v1.ImposmSyncSpec) EgressPorts {
 	var e EgressPorts
-	if !strings.HasPrefix(s.Database.Host, "/") {
+	// a socket directory needs no port; with secretRef the host is the
+	// Secret's, unknown here
+	if !strings.HasPrefix(s.Database.Host, "/") || s.Database.SecretRef != nil {
 		e.Database = s.Database.Port
 	}
 	if et := s.Imposm.ExpireTiles; et != nil && et.Redis != nil {

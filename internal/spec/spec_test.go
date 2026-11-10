@@ -58,6 +58,15 @@ func TestDecodeRejects(t *testing.T) {
 		"schema inject": func(s string) string {
 			return strings.Replace(s, "  user: app\n", "  user: app\n  schemas: {backup: \"x; drop\"}\n", 1)
 		},
+		"no host without secretRef": func(s string) string {
+			return strings.Replace(s, "  host: osm-rw\n", "", 1)
+		},
+		"bad host with secretRef": func(s string) string {
+			return strings.Replace(s, "  host: osm-rw\n", "  host: a b\n  secretRef: {name: db}\n", 1)
+		},
+		"bad secretRef name": func(s string) string {
+			return strings.Replace(s, "  user: app\n", "  user: app\n  secretRef: {name: Bad_Name}\n", 1)
+		},
 		"two secrets": func(s string) string {
 			return strings.Replace(s, "  user: app\n", "  user: app\n  passwordSecretRef: {name: a, key: b}\n", 1)
 		},
@@ -280,4 +289,29 @@ func validSpec(t *testing.T) *v1.ImposmSyncSpec {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// With secretRef, host, database and user may come from the Secret.
+func TestDatabaseFromSecret(t *testing.T) {
+	src := strings.Replace(minimal, "  host: osm-rw\n  database: app\n  user: app\n", "  secretRef: {name: osm-db}\n", 1)
+	s, err := Decode([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Database.SecretRef.Name != "osm-db" || s.Database.Port != 5432 || s.Database.Host != "" {
+		t.Fatalf("%+v", s.Database)
+	}
+	if e := Egress(s); e.Database != 5432 {
+		t.Fatalf("egress: %+v", e)
+	}
+	// a socket host in the spec opens no port, unless the Secret may name a
+	// TCP host
+	s.Database.Host = "/var/run/postgresql"
+	if e := Egress(s); e.Database != 5432 {
+		t.Fatalf("egress with a socket host and secretRef: %+v", e)
+	}
+	s.Database.SecretRef = nil
+	if e := Egress(s); e.Database != 0 {
+		t.Fatalf("egress with a socket host: %+v", e)
+	}
 }

@@ -87,9 +87,11 @@ spec:
                   description: DatabaseSpec is the PostGIS target.
                   properties:
                     database:
+                      description: Optional with secretRef.
                       minLength: 1
                       type: string
                     host:
+                      description: Host name, IP or socket directory. Optional with secretRef.
                       minLength: 1
                       type: string
                     passwordSecretRef:
@@ -140,6 +142,9 @@ spec:
                       x-kubernetes-map-type: atomic
                     port:
                       default: 5432
+                      description: |-
+                        Port, also opened by the runner's NetworkPolicy: a port in secretRef
+                        must equal it.
                       format: int32
                       maximum: 65535
                       minimum: 1
@@ -161,6 +166,25 @@ spec:
                           description: State is where the operator records imports and applied diffs.
                           type: string
                       type: object
+                    secretRef:
+                      description: |-
+                        SecretRef names a Secret in the sync's namespace with the connection:
+                        keys host, port, dbname, user and sslmode (each optional; the keys of
+                        CloudNativePG's <cluster>-app secret). Its values win over the fields
+                        above. Read by the runner only; the password still comes from
+                        passwordSecretRef or pgpassSecretRef (which may name the same Secret).
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
                     sslMode:
                       default: require
                       enum:
@@ -170,13 +194,13 @@ spec:
                         - verify-full
                       type: string
                     user:
+                      description: Optional with secretRef.
                       minLength: 1
                       type: string
-                  required:
-                    - database
-                    - host
-                    - user
                   type: object
+                  x-kubernetes-validations:
+                    - message: host, database and user are required without secretRef
+                      rule: has(self.secretRef) || (has(self.host) && has(self.database) && has(self.user))
                 deletionPolicy:
                   default: Retain
                   description: |-

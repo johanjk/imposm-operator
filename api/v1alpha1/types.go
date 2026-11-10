@@ -100,18 +100,34 @@ type SourceSpec struct {
 }
 
 // DatabaseSpec is the PostGIS target.
+// +kubebuilder:validation:XValidation:rule="has(self.secretRef) || (has(self.host) && has(self.database) && has(self.user))",message="host, database and user are required without secretRef"
 type DatabaseSpec struct {
+	// Host name, IP or socket directory. Optional with secretRef.
 	// +kubebuilder:validation:MinLength=1
-	Host string `json:"host"`
+	// +optional
+	Host string `json:"host,omitempty"`
+	// Port, also opened by the runner's NetworkPolicy: a port in secretRef
+	// must equal it.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +kubebuilder:default=5432
 	// +optional
 	Port int32 `json:"port,omitempty"`
+	// Optional with secretRef.
 	// +kubebuilder:validation:MinLength=1
-	Database string `json:"database"`
+	// +optional
+	Database string `json:"database,omitempty"`
+	// Optional with secretRef.
 	// +kubebuilder:validation:MinLength=1
-	User string `json:"user"`
+	// +optional
+	User string `json:"user,omitempty"`
+	// SecretRef names a Secret in the sync's namespace with the connection:
+	// keys host, port, dbname, user and sslmode (each optional; the keys of
+	// CloudNativePG's <cluster>-app secret). Its values win over the fields
+	// above. Read by the runner only; the password still comes from
+	// passwordSecretRef or pgpassSecretRef (which may name the same Secret).
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
 	// +kubebuilder:validation:Enum=disable;require;verify-ca;verify-full
 	// +kubebuilder:default=require
 	// +optional

@@ -8,13 +8,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/johanjk/imposm-operator/internal/strutil"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	v1 "github.com/johanjk/imposm-operator/api/v1alpha1"
 	"github.com/johanjk/imposm-operator/internal/download"
@@ -25,6 +27,7 @@ import (
 	"github.com/johanjk/imposm-operator/internal/pgconf"
 	"github.com/johanjk/imposm-operator/internal/spec"
 	"github.com/johanjk/imposm-operator/internal/state"
+	"github.com/johanjk/imposm-operator/internal/strutil"
 	"github.com/johanjk/imposm-operator/internal/upstream"
 )
 
@@ -40,6 +43,8 @@ type Options struct {
 	Timeout        time.Duration
 	AllowGroupPass bool
 	ExpireDir      string
+	// DatabaseSecretDir is database.secretRef, mounted (a file per key).
+	DatabaseSecretDir string
 }
 
 // Environment variables carrying expire-tile Redis credentials (set from
@@ -52,11 +57,13 @@ const (
 // Secrets are mounted as files (one projected volume), not passed as
 // environment variables: <NAME>_FILE names the file holding <NAME>'s value.
 const (
-	SecretsDir         = "/var/run/secrets/imposm-operator"
-	SecretPgpass       = "pgpass"
-	SecretPassword     = "password"
-	SecretRedisURL     = "redis-url"
-	SecretRedisPasswd  = "redis-password"
+	SecretsDir        = "/var/run/secrets/imposm-operator"
+	SecretPgpass      = "pgpass"
+	SecretPassword    = "password"
+	SecretRedisURL    = "redis-url"
+	SecretRedisPasswd = "redis-password"
+	// DatabaseSecretDir is where database.secretRef is mounted.
+	DatabaseSecretDir  = "/var/run/secrets/imposm-operator-database"
 	EnvPasswordFile    = "PGPASSWORD_FILE"
 	fileSuffix         = "_FILE"
 	maxSecretFileBytes = 64 << 10
@@ -68,19 +75,25 @@ const (
 func FileEnv(getenv func(string) string) func(string) string {
 	return func(name string) string {
 		if p := getenv(name + fileSuffix); p != "" {
-			f, err := os.Open(p)
+			v, err := readSecretFile(p)
 			if err != nil {
 				return ""
 			}
-			defer f.Close()
-			b, err := io.ReadAll(io.LimitReader(f, maxSecretFileBytes))
-			if err != nil {
-				return ""
-			}
-			return strings.TrimRight(string(b), "\r\n")
+			return strings.TrimRight(v, "\r\n")
 		}
 		return getenv(name)
 	}
+}
+
+// readSecretFile reads a mounted secret (at most maxSecretFileBytes).
+func readSecretFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxSecretFileBytes))
+	return string(b), err
 }
 
 // Default paths inside the runner container; the controller and the chart
@@ -110,6 +123,8 @@ func Main(ctx context.Context, args []string, log *slog.Logger) int {
 	fs.StringVar(&o.ImposmBinary, "imposm", "imposm", "imposm binary")
 	fs.DurationVar(&o.Timeout, "timeout", 23*time.Hour, "abort the run after this long")
 	fs.StringVar(&o.ExpireDir, "expiretiles-dir", DefaultExpireDir, "directory for expireTiles.files (the mounted volume, subPath already applied)")
+	fs.StringVar(&o.DatabaseSecretDir, "database-secret-dir", "",
+		"directory with the database.secretRef keys (host, port, dbname, user, sslmode) as files")
 	fs.BoolVar(&o.AllowGroupPass, "pgpass-allow-group-readable", false,
 		"accept a group-readable (not world-readable) password file, as Kubernetes Secret volumes with fsGroup are")
 	if err := fs.Parse(args); err != nil {
@@ -146,6 +161,14 @@ func Run(ctx context.Context, o Options, log *slog.Logger) (*engine.Result, erro
 	s, err := spec.Decode(b)
 	if err != nil {
 		return nil, err
+	}
+	switch {
+	case o.DatabaseSecretDir != "":
+		if err := ApplyDatabaseSecret(s, o.DatabaseSecretDir); err != nil {
+			return nil, err
+		}
+	case s.Database.SecretRef != nil:
+		return nil, fmt.Errorf("database.secretRef %q is set but not mounted: run with --database-secret-dir", s.Database.SecretRef.Name)
 	}
 	name := o.Name
 	if name == "" {
@@ -265,6 +288,49 @@ func LoadMapping(s *v1.ImposmSyncSpec, mappingDir string) (*mapping.Result, erro
 		return nil, err
 	}
 	return mapping.Merge(parts)
+}
+
+// ApplyDatabaseSecret sets the connection fields from database.secretRef,
+// mounted at dir (one file per key; missing keys keep the spec's values),
+// and validates the result. The port must equal database.port: the
+// runner's NetworkPolicy opens that one.
+func ApplyDatabaseSecret(s *v1.ImposmSyncSpec, dir string) error {
+	// a missing key reads as ""
+	read := func(key string) (string, error) {
+		v, err := readSecretFile(filepath.Join(dir, key))
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("database secret: %w", err)
+		}
+		return strings.TrimSpace(v), nil
+	}
+	d := &s.Database
+	for _, f := range []struct {
+		key string
+		dst *string
+	}{{"host", &d.Host}, {"dbname", &d.Database}, {"user", &d.User}, {"sslmode", &d.SSLMode}} {
+		v, err := read(f.key)
+		if err != nil {
+			return err
+		}
+		if v != "" {
+			*f.dst = v
+		}
+	}
+	if v, err := read("port"); err != nil {
+		return err
+	} else if v != "" {
+		// database.port is validated: equal means a valid port
+		if p, err := strconv.Atoi(v); err != nil || int32(p) != d.Port {
+			return fmt.Errorf("database secret: port %q differs from database.port %d; set database.port to it (the runner's NetworkPolicy opens database.port)", v, d.Port)
+		}
+	}
+	if errs := spec.ValidateConnection(field.NewPath("database secret"), d, false); len(errs) > 0 {
+		return errs.ToAggregate()
+	}
+	return nil
 }
 
 // DBConfig builds the connection config from the spec plus PG* environment

@@ -80,3 +80,16 @@
   (phase `Conflict`).
 - Passwords: `database.pgpassSecretRef` (libpq password file, e.g. CNPG's
   `<cluster>-app` secret, key `pgpass`) or `database.passwordSecretRef`.
+- Connection from a Secret: `database.secretRef` names a Secret with the
+  keys `host`, `port`, `dbname`, `user` and `sslmode` (each optional, the
+  keys of CNPG's `<cluster>-app` secret), which win over the spec's fields;
+  `host`, `database` and `user` may then be left out of the spec. Only the
+  runner reads it (mounted as files). `database.port` stays in the spec, as
+  the runner's NetworkPolicy opens it: a different port in the Secret fails
+  the run with a message to set it. The password still comes from
+  `pgpassSecretRef` or `passwordSecretRef`, which may name the same Secret:
+  ```yaml
+  database:
+    secretRef: {name: osm-app}
+    pgpassSecretRef: {name: osm-app, key: pgpass}
+  ```
