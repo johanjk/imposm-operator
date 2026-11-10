@@ -21,8 +21,9 @@ group "default" {
   targets = ["controller", "runner"]
 }
 
-# The published images, for both architectures (arm64 built under
-# emulation, so the cgo imposm build is slow there).
+# The published images, for both architectures. A local multi-platform
+# build emulates the foreign one for the cgo imposm stage (slow); CI builds
+# each architecture natively (deployments.yaml sets the platform).
 group "release" {
   targets = ["controller-release", "runner-release"]
 }

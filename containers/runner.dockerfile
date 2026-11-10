@@ -25,7 +25,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
       -ldflags "-s -w -X github.com/omniscale/imposm3.Version=${IMPOSM_REF}" \
       -o /out/imposm ./cmd/imposm
 
-FROM golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473 AS operator
+# Pure Go: cross-compiled like the controller. (The imposm stage above
+# needs cgo and is built on the target platform.)
+FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473 AS operator
+ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 # set by docker/metadata-action in CI (the image version)
 ARG DOCKER_META_VERSION
@@ -36,7 +39,7 @@ COPY api api
 COPY cmd cmd
 COPY internal internal
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${DOCKER_META_VERSION:-${VERSION}}" \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=${DOCKER_META_VERSION:-${VERSION}}" \
       -o /out/imposm-operator ./cmd/imposm-operator
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
