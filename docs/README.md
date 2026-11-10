@@ -3,6 +3,8 @@
 - [Deployment options](deployment.md): the two modes (`crd`, `configmap`),
   what each needs, how to install and operate them, and running the runner
   without the operator.
+- [Database](database.md): the rights a sync's user needs, setup SQL, and
+  read-only access for consumers.
 - [Features](features.md): upstreams, actions, expire tiles, re-imports and
   renames, storage, monitoring, security, several regions, passwords.
 - [Design](design.md): architecture, the sync state machine, workspaces,

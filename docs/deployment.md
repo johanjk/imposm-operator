@@ -49,7 +49,8 @@ kubectl get configmap monaco-status -o jsonpath='{.data.status\.yaml}'
 kubectl annotate configmap monaco imposm.johanjk.github.io/action=sync
 ```
 
-In both modes you need PostGIS and an imposm mapping, for example:
+In both modes you need PostGIS (the rights the sync's user needs:
+[database.md](database.md)) and an imposm mapping, for example:
 
 ```sh
 kubectl apply -f examples/cnpg-cluster.yaml   # PostgreSQL 18 + PostGIS image volume extension via CloudNativePG (optional; Kubernetes 1.35+)
