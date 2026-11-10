@@ -1,5 +1,8 @@
 GO        ?= go
 TAG       ?= dev
+# compiled into the binaries (main.version, also in the HTTP User-Agent);
+# release images get the version from docker/metadata-action instead
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REGISTRY  ?= ghcr.io/johanjk
 CONTROLLER_IMAGE ?= $(REGISTRY)/imposm-operator:$(TAG)
 RUNNER_IMAGE     ?= $(REGISTRY)/imposm-operator-runner:$(TAG)
@@ -26,7 +29,7 @@ FUZZ_TARGETS = \
 all: generate build test helm-lint
 
 build:
-	$(GO) build -o bin/imposm-operator ./cmd/imposm-operator
+	$(GO) build -ldflags "-X main.version=$(VERSION)" -o bin/imposm-operator ./cmd/imposm-operator
 
 ## generate: deepcopy, CRD, JSON schemas and the chart's CRD copy
 generate:
@@ -62,7 +65,7 @@ chaos-imposm: docker-runner
 docker: docker-controller docker-runner docker-e2e
 
 # Images are built with docker buildx bake (docker-bake.hcl), as in CI.
-BAKE = docker buildx bake --load --set '*.args.VERSION=$(TAG)'
+BAKE = docker buildx bake --load --set '*.args.VERSION=$(VERSION)'
 
 docker-controller:
 	$(BAKE) --set 'controller.tags=$(CONTROLLER_IMAGE)' controller
