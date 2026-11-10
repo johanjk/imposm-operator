@@ -107,7 +107,7 @@ run direct
 
 # 4. compare
 log "comparing public (live: snapshot + minutely diffs) with direct (reference import)"
-docker run --rm --network "$id" --user 0:0 -v "$WORK:/w" -v "$ROOT/examples/mapping:/mapping:ro" --entrypoint /w/tablesums "$RUNNER_IMAGE" \
+docker run --rm --network "$id" --user "$HOST_USER" -v "$WORK:/w" -v "$ROOT/examples/mapping:/mapping:ro" --entrypoint /w/tablesums "$RUNNER_IMAGE" \
 	-conn "host=pg user=osm password=secret dbname=osm sslmode=disable" -schema public -compare-schema direct \
 	-tolerance "${TOLERANCE:-0.1}" -mapping-dir /mapping
 find "$WORK/live/expiretiles" -name '*.tiles' | wc -l | sed 's/^/expire files: /'

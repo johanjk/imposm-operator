@@ -68,7 +68,7 @@ log "direct import of $TARGET as a second sync in the same database"
 run direct
 
 log "comparing public (snapshot + diffs) with direct (target import)"
-docker run --rm --network "$id" --user 0:0 -v "$WORK:/w" -v "$ROOT/examples/mapping:/mapping:ro" --entrypoint /w/tablesums "$RUNNER_IMAGE" \
+docker run --rm --network "$id" --user "$HOST_USER" -v "$WORK:/w" -v "$ROOT/examples/mapping:/mapping:ro" --entrypoint /w/tablesums "$RUNNER_IMAGE" \
 	-conn "host=pg user=osm password=secret dbname=osm sslmode=disable" -schema public -compare-schema direct -tolerance "${TOLERANCE:-0.1}" \
 	-mapping-dir /mapping
 

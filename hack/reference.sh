@@ -16,7 +16,7 @@ work=$(mktemp -d)
 . hack/lib.sh
 cleanup() {
 	lib_cleanup
-	docker run --rm -v "$work:/w" --user 0:0 --entrypoint /bin/sh "$RUNNER_IMAGE" -c 'rm -rf /w/*' >/dev/null 2>&1 || true
+	docker run --rm -v "$work:/w" --user "$HOST_USER" --entrypoint /bin/sh "$RUNNER_IMAGE" -c 'rm -rf /w/*' >/dev/null 2>&1 || true
 	rm -rf "$work"
 }
 trap cleanup EXIT
@@ -52,9 +52,9 @@ done
 setup direct direct "$TARGET" none
 run direct >/dev/null
 
-ts() { docker run --rm --network "$id" --user 0:0 -v "$work:/w" -v "$PWD/test/fixtures/monaco:/fx" --entrypoint /w/tablesums "$RUNNER_IMAGE" "$@"; }
+ts() { docker run --rm --network "$id" --user "$HOST_USER" -v "$work:/w" -v "$PWD/test/fixtures/monaco:/fx" --entrypoint /w/tablesums "$RUNNER_IMAGE" "$@"; }
 ts -conn "host=pg user=osm password=secret dbname=osm sslmode=disable" \
 	-tolerant-with "host=pg user=osm password=secret dbname=direct sslmode=disable" -tolerance 0.05
 ts -conn "host=pg user=osm password=secret dbname=osm sslmode=disable" -head "$HEAD_SEQUENCE" -dump /fx/reference.rows.json.gz
-docker run --rm --user 0:0 -v "$work:/w" -v "$PWD/test/fixtures/monaco:/fx" --entrypoint /w/expirecheck "$RUNNER_IMAGE" \
+docker run --rm --user "$HOST_USER" -v "$work:/w" -v "$PWD/test/fixtures/monaco:/fx" --entrypoint /w/expirecheck "$RUNNER_IMAGE" \
 	-write -dir /w/diffs/expiretiles -reference /fx/reference.tiles

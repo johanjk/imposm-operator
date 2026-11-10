@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -47,6 +48,26 @@ func Available() bool {
 	defer cancel()
 	return exec.CommandContext(ctx, "docker", "info").Run() == nil
 }
+
+// HostUser is the --user for containers that write into bind-mounted test
+// directories, so the test can read and remove what they write: the host
+// user's uid:gid with a rootful daemon (e.g. GitHub's runners), root with a
+// rootless one (container root is the host user there).
+func HostUser() string {
+	hostUserOnce.Do(func() {
+		hostUser = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+		out, err := exec.Command("docker", "info", "-f", "{{.SecurityOptions}}").Output()
+		if err == nil && strings.Contains(string(out), "rootless") {
+			hostUser = "0:0"
+		}
+	})
+	return hostUser
+}
+
+var (
+	hostUserOnce sync.Once
+	hostUser     string
+)
 
 // Network creates a throwaway network.
 func (d Docker) Network(name string) string {

@@ -9,6 +9,15 @@
 POSTGIS_IMAGE=${POSTGIS_IMAGE:-postgis/postgis:18-3.7@sha256:c5d1ba4292ff7b4471ff41cd515c677633797b72cdd2a7bb691cadaab91f1a1f}
 CURL_IMAGE=${CURL_IMAGE:-curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69}
 
+# The --user for containers writing into bind-mounted work directories, so
+# this script can read and remove what they write: the host user with a
+# rootful daemon, root with a rootless one (container root is the host user).
+if docker info -f '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+	HOST_USER=0:0
+else
+	HOST_USER="$(id -u):$(id -g)"
+fi
+
 # lib_cleanup removes the containers and the network.
 lib_cleanup() {
 	docker rm -f "$id-pg" "$id-fx" >/dev/null 2>&1 || true
@@ -54,7 +63,7 @@ runner_dir() {
 # runner_run DIR NAME [LOG]: one runner run; prints its JSON result, appends
 # the log to LOG (default: discarded).
 runner_run() {
-	docker run --rm --network "$id" --user 0:0 -e PGPASSFILE=/etc/imposm-operator/pgpass \
+	docker run --rm --network "$id" --user "$HOST_USER" -e PGPASSFILE=/etc/imposm-operator/pgpass \
 		-v "$1/etc:/etc/imposm-operator:ro" -v "$1/data:/var/lib/imposm-operator/data" \
 		-v "$1/expiretiles:/expiretiles" \
 		"$RUNNER_IMAGE" run --name "$2" --termination-log "" 2>>"${3:-/dev/null}" | tail -1

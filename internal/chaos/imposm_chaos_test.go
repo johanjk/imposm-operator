@@ -195,7 +195,7 @@ func (e *imposmEnv) addSync(db, name, imposmExtra string) *scenario {
 }
 
 func (s *scenario) runArgs(name string) []string {
-	return []string{"run", "--name", name, "--network", s.e.net, "--user", "0:0",
+	return []string{"run", "--name", name, "--network", s.e.net, "--user", HostUser(),
 		"-e", "PGPASSFILE=/etc/imposm-operator/pgpass",
 		"-v", s.etc + ":/etc/imposm-operator:ro", "-v", s.data + ":/var/lib/imposm-operator/data", "-v", s.expire + ":/expiretiles",
 		s.e.image, "run", "--name", s.name, "--termination-log", "", "--imposm", "/etc/imposm-operator/imposm-shim"}
@@ -279,7 +279,7 @@ func (s *scenario) verify() {
 	s.e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	out, err := s.e.d.Run(ctx, "run", "--rm", "--network", s.e.net, "--user", "0:0",
+	out, err := s.e.d.Run(ctx, "run", "--rm", "--network", s.e.net, "--user", HostUser(),
 		"-v", s.e.tools+":/tools:ro", "-v", s.e.fx.Dir+":/fx:ro", "-v", filepath.Join(s.etc, "mapping", "osm-mapping")+":/mapping:ro",
 		"--entrypoint", "/tools/tablesums", s.e.image,
 		"-conn", "host=pg user=osm password=secret dbname="+s.db+" sslmode=disable", "-prefix", s.prefix,
