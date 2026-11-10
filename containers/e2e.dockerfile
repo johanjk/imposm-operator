@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 # e2e helper image: fixture server (imposm-operator fixture-server), the frozen
 # Monaco fixture with reference.rows.json.gz and reference.tiles, and the
 # tablesums and expirecheck checkers.
