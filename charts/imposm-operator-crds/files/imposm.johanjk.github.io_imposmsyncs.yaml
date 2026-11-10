@@ -1034,6 +1034,17 @@ spec:
                 currentTimestamp:
                   format: date-time
                   type: string
+                emptyTableCount:
+                  format: int32
+                  type: integer
+                emptyTables:
+                  description: |-
+                    EmptyTables are production tables without rows (EmptyTables; at most
+                    11 entries, EmptyTableCount is the number).
+                  items:
+                    type: string
+                  type: array
+                  x-kubernetes-list-type: atomic
                 expirePending:
                   description: |-
                     ExpirePending is the number of expire-tile batches not yet delivered
@@ -1056,6 +1067,43 @@ spec:
                   type: integer
                 lastJob:
                   type: string
+                lastRunDiffRanges:
+                  description: |-
+                    LastRunDiffRanges are the diffs the last finished run applied, one
+                    range per import, with the replication timestamps they cover.
+                  items:
+                    description: |-
+                      DiffRange is a run of applied diffs: sequences from to to, with the
+                      changes newer than fromTime (the data before the first diff) up to toTime
+                      (the replication timestamp of the last diff).
+                    properties:
+                      from:
+                        format: int64
+                        type: integer
+                      fromTime:
+                        format: date-time
+                        type: string
+                      importID:
+                        format: int64
+                        type: integer
+                      production:
+                        description: |-
+                          Production: applied to production; otherwise to an import catching up
+                          before its deploy.
+                        type: boolean
+                      to:
+                        format: int64
+                        type: integer
+                      toTime:
+                        format: date-time
+                        type: string
+                    required:
+                      - from
+                      - importID
+                      - to
+                    type: object
+                  type: array
+                  x-kubernetes-list-type: atomic
                 lastRunDiffs:
                   description: LastRunDiffs applied by the last finished run.
                   format: int32

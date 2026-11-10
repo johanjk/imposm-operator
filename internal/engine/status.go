@@ -3,7 +3,6 @@ package engine
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -68,14 +67,25 @@ func (r *run) finish() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), 15*time.Second)
 	defer cancel()
 	dep, cur := r.dep, r.cur
+	// the workspaces of production and the import being built, read once
+	var wss []*workspace
+	var depWS *workspace
+	for _, imp := range []*state.Import{dep, cur} {
+		if imp == nil || (len(wss) > 0 && wss[0].imp.ID == imp.ID) {
+			continue
+		}
+		if w, err := r.workspaceFor(imp); err == nil {
+			wss = append(wss, w)
+			if imp == dep {
+				depWS = w
+			}
+		}
+	}
 	if dep != nil {
 		p := &ProductionInfo{ImportID: dep.ID, DeployedAt: dep.DeployedAt, BackupKept: dep.BackupKept, Syncing: r.prodPaused == ""}
 		if pos, err := r.Store.Applied(ctx, dep); err == nil {
 			p.Sequence = pos.Sequence
-			if !pos.Timestamp.IsZero() {
-				ts := pos.Timestamp
-				p.Timestamp = &ts
-			}
+			p.Timestamp = nonZero(pos.Timestamp)
 		}
 		if r.res.CurrentSequence == 0 && p.Sequence > 0 { // the run failed before reporting
 			r.res.CurrentSequence, r.res.CurrentTimestamp = p.Sequence, p.Timestamp
@@ -85,6 +95,7 @@ func (r *run) finish() {
 		}
 		r.res.Production = p
 		r.res.CacheBytes = dirSize(filepath.Join(ImportDir(r.DataDir, dep.ID), "cache"))
+		r.emptyTables(ctx, depWS)
 	} else if cur != nil && cur.Phase == state.PhaseReverted {
 		r.res.Production = &ProductionInfo{ImportID: cur.ID, PausedReason: PauseReverted,
 			PausedMessage: "production was reverted to the backup; diffs are paused until the deploy or reimport action"}
@@ -116,40 +127,45 @@ func (r *run) finish() {
 	default:
 		r.res.SpecApplied = true
 	}
-	r.res.UnusedTables = r.unusedTables(ctx, dep, cur)
+	r.res.UnusedTables = r.unusedTables(ctx, wss)
+}
+
+// emptyTables reports production's tables without rows. When the check
+// fails (or production's workspace is unreadable) it says so, and the
+// controller keeps what earlier runs reported.
+func (r *run) emptyTables(ctx context.Context, w *workspace) {
+	if w == nil {
+		r.res.EmptyTablesUnknown = true
+		return
+	}
+	out, err := r.Store.EmptyTables(ctx, qualify(w.cfg.Production, w.names()))
+	if err != nil {
+		r.log().Warn("could not check for empty tables", "err", err)
+		r.res.EmptyTablesUnknown = true
+		return
+	}
+	r.res.EmptyTableCount = len(out)
+	r.res.EmptyTables = capListed(out)
 }
 
 // unusedTables are claimed tables neither production nor the import being
-// built uses: kept because something depends on them.
-func (r *run) unusedTables(ctx context.Context, imps ...*state.Import) []string {
+// built (workspaces wss) uses: kept because something depends on them.
+func (r *run) unusedTables(ctx context.Context, wss []*workspace) []string {
 	claimed, err := r.Store.Claimed(ctx, r.claimOwner())
-	if err != nil || len(claimed) == 0 {
+	if err != nil || len(claimed) == 0 || len(wss) == 0 {
 		return nil
 	}
 	inUse := map[string]bool{}
-	known := false
-	for _, imp := range imps {
-		if imp == nil {
-			continue
-		}
-		w, err := r.workspaceFor(imp)
-		if errors.Is(err, errNoWorkspace) || err != nil {
-			continue
-		}
-		known = true
+	for _, w := range wss {
 		for _, t := range w.tables() {
 			inUse[t] = true
 		}
 	}
 	// the spec's own tables are claimed at the start of every run
-	tables, err := r.claimTables()
-	if err == nil {
+	if tables, err := r.claimTables(); err == nil {
 		for _, t := range tables {
 			inUse[t] = true
 		}
-	}
-	if !known {
-		return nil
 	}
 	var out []string
 	for _, t := range claimed {
@@ -158,8 +174,5 @@ func (r *run) unusedTables(ctx context.Context, imps ...*state.Import) []string 
 		}
 	}
 	sort.Strings(out)
-	if len(out) > maxListed {
-		out = append(out[:maxListed], fmt.Sprintf("... %d more", len(out)-maxListed))
-	}
-	return out
+	return capListed(out)
 }

@@ -155,8 +155,31 @@ type Result struct {
 	// CacheBytes is the size of production's imposm cache (a re-import that
 	// keeps production syncing needs about 1.2 times that free).
 	CacheBytes int64 `json:"cacheBytes,omitempty"`
+	// EmptyTables are production tables without rows (schema.table, at most
+	// maxListed), EmptyTableCount all of them: often a mapping that matches
+	// nothing in the region. EmptyTablesUnknown: the check failed; both say
+	// nothing.
+	EmptyTables        []string `json:"emptyTables,omitempty"`
+	EmptyTableCount    int      `json:"emptyTableCount,omitempty"`
+	EmptyTablesUnknown bool     `json:"emptyTablesUnknown,omitempty"`
+	// Diffs are the diffs this run applied, one range per import.
+	Diffs []DiffRange `json:"diffs,omitempty"`
 	// Events are one-time things this run did (at most maxListed).
 	Events []Event `json:"events,omitempty"`
+}
+
+// DiffRange is a run of applied diffs: sequences From to To, the changes
+// newer than FromTime (the data before the first diff) up to ToTime (the
+// replication timestamp of the last diff).
+type DiffRange struct {
+	ImportID int64 `json:"importID"`
+	// Production: applied to production; otherwise to an import catching up
+	// before its deploy.
+	Production bool       `json:"production,omitempty"`
+	From       int64      `json:"from"`
+	To         int64      `json:"to"`
+	FromTime   *time.Time `json:"fromTime,omitempty"`
+	ToTime     *time.Time `json:"toTime,omitempty"`
 }
 
 // ProductionInfo describes the import in production.
@@ -233,6 +256,22 @@ func CacheHeadroom(cacheBytes int64) int64 { return cacheBytes * 12 / 10 }
 // maxListed bounds the lists in a Result: it travels in a pod's 4 KiB
 // termination message.
 const maxListed = 10
+
+// capListed shortens a list to maxListed entries and a "... N more" entry.
+func capListed(out []string) []string {
+	if len(out) > maxListed {
+		return append(out[:maxListed:maxListed], fmt.Sprintf("... %d more", len(out)-maxListed))
+	}
+	return out
+}
+
+// nonZero is t, or nil for the zero time.
+func nonZero(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
 
 // GapError means the upstream is missing a diff it should have.
 type GapError struct{ Seq int64 }
@@ -1295,6 +1334,7 @@ func (r *run) applyDiffs(w *workspace, production bool) error {
 		if b.Status == state.BatchApplied {
 			applied := int(b.To - from + 1)
 			r.res.DiffsApplied += applied
+			r.noteDiffs(imp.ID, production, from, b.To, pos.Timestamp, b.ToTimestamp)
 			r.budget -= applied
 			pos = state.Position{Sequence: b.To, Timestamp: b.ToTimestamp}
 			r.report(imp, &pos)
@@ -1311,6 +1351,20 @@ func (r *run) applyDiffs(w *workspace, production bool) error {
 		r.res.Message = fmt.Sprintf("diff budget used up at %d/%d; the next run continues", pos.Sequence, r.head.Sequence)
 	}
 	return nil
+}
+
+// noteDiffs extends the run's diff range for the import (or starts one).
+func (r *run) noteDiffs(importID int64, production bool, from, to int64, fromTime, toTime time.Time) {
+	for i := range r.res.Diffs {
+		if d := &r.res.Diffs[i]; d.ImportID == importID && d.Production == production && d.To+1 == from {
+			d.To, d.ToTime = to, nonZero(toTime)
+			return
+		}
+	}
+	if len(r.res.Diffs) < maxListed {
+		r.res.Diffs = append(r.res.Diffs, DiffRange{ImportID: importID, Production: production,
+			From: from, To: to, FromTime: nonZero(fromTime), ToTime: nonZero(toTime)})
+	}
 }
 
 // beginChunk checkpoints the cache and leaves a marker; a later run that

@@ -37,6 +37,7 @@ var (
 	mReimport     = gauge("reimport_running", "1 while a new import is built next to production.")
 	mProdPaused   = gauge("production_paused", "1 while production does not apply diffs, by reason.", "reason")
 	mUnused       = gauge("unused_tables", "Unused tables kept because something depends on them.")
+	mEmpty        = gauge("empty_tables", "Production tables without rows.")
 	mHeadroom     = gauge("reimport_headroom", "1 when the volume fits a second imposm cache, so a re-import keeps production syncing.")
 
 	mRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -47,7 +48,7 @@ var (
 	}, syncLabels)
 
 	allSyncMetrics = []prometheus.Collector{mLag, mCurrentSeq, mUpstreamSeq, mReady, mRunning, mPhase, mLastRun,
-		mLastSuccess, mLastDuration, mNextRun, mFailures, mExpire, mStorageUsed, mStorageAvail, mStorageTotal, mReimport, mProdPaused, mUnused, mHeadroom, mRuns, mDiffs}
+		mLastSuccess, mLastDuration, mNextRun, mFailures, mExpire, mStorageUsed, mStorageAvail, mStorageTotal, mReimport, mProdPaused, mUnused, mEmpty, mHeadroom, mRuns, mDiffs}
 )
 
 func init() { metrics.Registry.MustRegister(allSyncMetrics...) }
@@ -83,6 +84,7 @@ func recordMetrics(s *Sync, source string) {
 		mProdPaused.With(prometheus.Labels{"namespace": l["namespace"], "name": l["name"], "source": source, "reason": p.PausedReason}).Set(1)
 	}
 	set(mUnused, float64(len(st.UnusedTables)))
+	set(mEmpty, float64(st.EmptyTableCount))
 	if c := apimeta.FindStatusCondition(st.Conditions, v1.ConditionReimportHeadroom); c != nil {
 		set(mHeadroom, b(c.Status == metav1.ConditionTrue))
 	}

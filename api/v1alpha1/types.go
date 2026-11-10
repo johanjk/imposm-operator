@@ -460,7 +460,28 @@ const (
 	ConditionReimportHeadroom = "ReimportHeadroom"
 	// ConditionUnusedTablesKept: unused tables could not be dropped.
 	ConditionUnusedTablesKept = "UnusedTablesKept"
+	// ConditionEmptyTables: production has tables without rows (often a
+	// mapping that matches nothing in the region, or a filter on a tag the
+	// data lacks).
+	ConditionEmptyTables = "EmptyTables"
 )
+
+// DiffRange is a run of applied diffs: sequences from to to, with the
+// changes newer than fromTime (the data before the first diff) up to toTime
+// (the replication timestamp of the last diff).
+type DiffRange struct {
+	ImportID int64 `json:"importID"`
+	// Production: applied to production; otherwise to an import catching up
+	// before its deploy.
+	// +optional
+	Production bool  `json:"production,omitempty"`
+	From       int64 `json:"from"`
+	To         int64 `json:"to"`
+	// +optional
+	FromTime *metav1.Time `json:"fromTime,omitempty"`
+	// +optional
+	ToTime *metav1.Time `json:"toTime,omitempty"`
+}
 
 // RunProgress is the live state of a running sync Job, read from the
 // runner's progress log while it runs.
@@ -605,6 +626,18 @@ type ImposmSyncStatus struct {
 	// LastRunDiffs applied by the last finished run.
 	// +optional
 	LastRunDiffs int32 `json:"lastRunDiffs,omitempty"`
+	// LastRunDiffRanges are the diffs the last finished run applied, one
+	// range per import, with the replication timestamps they cover.
+	// +listType=atomic
+	// +optional
+	LastRunDiffRanges []DiffRange `json:"lastRunDiffRanges,omitempty"`
+	// EmptyTables are production tables without rows (EmptyTables; at most
+	// 11 entries, EmptyTableCount is the number).
+	// +listType=atomic
+	// +optional
+	EmptyTables []string `json:"emptyTables,omitempty"`
+	// +optional
+	EmptyTableCount int32 `json:"emptyTableCount,omitempty"`
 	// ConsecutiveFailures of finished runs (0 after a success).
 	// +optional
 	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`

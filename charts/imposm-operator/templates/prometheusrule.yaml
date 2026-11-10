@@ -58,4 +58,10 @@ spec:
           labels: {severity: info}
           annotations:
             summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: {{`{{ $value }}`}} unused tables kept because something depends on them; see status.unusedTables"
+        - alert: ImposmSyncEmptyTables
+          expr: imposm_sync_empty_tables > 0
+          for: 1h
+          labels: {severity: info}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: {{`{{ $value }}`}} production tables have no rows; see status.emptyTables"
 {{- end }}

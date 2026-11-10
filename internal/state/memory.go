@@ -22,6 +22,10 @@ type Memory struct {
 
 	// Tables, when set, are the existing tables (schema.table).
 	Tables map[string]bool
+	// Empty: tables without rows (EmptyTables reports those that exist);
+	// FailEmptyTables makes EmptyTables fail.
+	Empty           map[string]bool
+	FailEmptyTables error
 	// Dependents: tables that something depends on (DropTables keeps them).
 	Dependents map[string]string
 	Dropped    []string
@@ -350,6 +354,24 @@ func (m *Memory) DropTables(_ context.Context, tables []string) (map[string]stri
 		m.Dropped = append(m.Dropped, t)
 	}
 	return kept, nil
+}
+
+func (m *Memory) EmptyTables(_ context.Context, tables []string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.fail(); err != nil {
+		return nil, err
+	}
+	if m.FailEmptyTables != nil {
+		return nil, m.FailEmptyTables
+	}
+	var out []string
+	for _, t := range tables {
+		if m.Empty[t] && (m.Tables == nil || m.Tables[t]) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func (m *Memory) MoveTables(_ context.Context, moves []TableMove) error {

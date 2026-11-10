@@ -1012,3 +1012,41 @@ func mustParts(t *testing.T) []mapping.Part {
 	}
 	return parts
 }
+
+// A run reports the diffs it applied with their replication timestamps,
+// and the production tables without rows.
+func TestDiffRangesAndEmptyTables(t *testing.T) {
+	mem := state.NewMemory()
+	mem.Empty = map[string]bool{"public.osm_roads": true, "import.osm_buildings": true}
+	h := testutil.NewHarness(t, testutil.HarnessOptions{Store: mem})
+	snap := h.Fixture.SnapshotSequence
+
+	r := h.Run(engine.ActionSync)
+	mustOK(t, r)
+	if len(r.Diffs) != 0 || !slices.Equal(r.EmptyTables, []string{"public.osm_roads"}) || r.EmptyTableCount != 1 || r.EmptyTablesUnknown {
+		t.Fatalf("after import: diffs %+v empty %v", r.Diffs, r.EmptyTables)
+	}
+	before := *r.CurrentTimestamp
+	h.Fixtures.SetHead(snap + 3)
+	r = h.Run(engine.ActionSync)
+	mustOK(t, r)
+	if len(r.Diffs) != 1 {
+		t.Fatalf("diffs: %+v", r.Diffs)
+	}
+	d := r.Diffs[0]
+	if !d.Production || d.From != snap+1 || d.To != snap+3 || d.FromTime == nil || !d.FromTime.Equal(before) ||
+		d.ToTime == nil || !d.ToTime.Equal(*r.CurrentTimestamp) || !d.ToTime.After(before) {
+		t.Fatalf("diff range %+v (before %v, now %v)", d, before, r.CurrentTimestamp)
+	}
+	mem.Empty = nil
+	h.Fixtures.SetHead(snap + 4)
+	if r = h.Run(engine.ActionSync); len(r.EmptyTables) != 0 || len(r.Diffs) != 1 || r.Diffs[0].From != snap+4 {
+		t.Fatalf("next run: diffs %+v empty %v", r.Diffs, r.EmptyTables)
+	}
+	// a failed check says so instead of reporting no empty tables
+	mem.FailEmptyTables = errors.New("connection reset")
+	h.Fixtures.SetHead(snap + 5)
+	if r = h.Run(engine.ActionSync); !r.EmptyTablesUnknown || r.Error != "" {
+		t.Fatalf("failed check: unknown=%v err=%q", r.EmptyTablesUnknown, r.Error)
+	}
+}

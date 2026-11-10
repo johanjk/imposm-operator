@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -530,8 +531,7 @@ func (p *Postgres) Claim(ctx context.Context, owner string, tables []string, kee
 func (p *Postgres) Claimed(ctx context.Context, owner string) ([]string, error) {
 	var out []string
 	err := retry(ctx, func() error {
-		var exists bool
-		if err := p.pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, ClaimSchema+".table_claim").Scan(&exists); err != nil || !exists {
+		if exists, err := regclassExists(ctx, p.pool, ClaimSchema+".table_claim"); err != nil || !exists {
 			out = nil
 			return err
 		}
@@ -567,13 +567,70 @@ func (p *Postgres) DropTables(ctx context.Context, tables []string) (map[string]
 	return kept, nil
 }
 
+func (p *Postgres) EmptyTables(ctx context.Context, tables []string) ([]string, error) {
+	if len(tables) == 0 {
+		return nil, nil
+	}
+	var out []string
+	err := retry(ctx, func() error {
+		out = nil
+		names := make([]string, len(tables))
+		for i, t := range tables {
+			names[i] = qualifiedIdent(t)
+		}
+		// which exist, then one query for which of those have no rows
+		var existing []string
+		if err := p.pool.QueryRow(ctx, `SELECT coalesce(array_agg(n ORDER BY i), '{}') FROM unnest($1::text[]) WITH ORDINALITY AS t(n, i) WHERE to_regclass(n) IS NOT NULL`,
+			names).Scan(&existing); err != nil {
+			return err
+		}
+		if len(existing) == 0 {
+			return nil
+		}
+		parts := make([]string, len(existing))
+		for i, n := range existing {
+			parts[i] = fmt.Sprintf("SELECT $%d::text WHERE NOT EXISTS (SELECT 1 FROM %s)", i+1, n)
+		}
+		args := make([]any, len(existing))
+		for i, n := range existing {
+			args[i] = n
+		}
+		rows, err := p.pool.Query(ctx, strings.Join(parts, " UNION ALL "), args...)
+		if err != nil {
+			return err
+		}
+		empty, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		// the callers' schema.table names, in their order
+		for i, t := range tables {
+			if slices.Contains(empty, names[i]) {
+				out = append(out, t)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("empty tables: %w", err)
+	}
+	return out, nil
+}
+
+// regclassExists reports whether the relation name (quoted as SQL) exists.
+func regclassExists(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, name string) (bool, error) {
+	var ok bool
+	err := q.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&ok)
+	return ok, err
+}
+
 func (p *Postgres) MoveTables(ctx context.Context, moves []TableMove) error {
 	return retry(ctx, func() error {
 		return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 			exists := func(t string) (bool, error) {
-				var ok bool
-				err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, qualifiedIdent(t)).Scan(&ok)
-				return ok, err
+				return regclassExists(ctx, tx, qualifiedIdent(t))
 			}
 			// Only tables that exist move. A target may be another moved
 			// table's old name (a chain or a swap): every table is first

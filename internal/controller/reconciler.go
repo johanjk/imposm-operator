@@ -224,10 +224,65 @@ func transitionEvents(prev, st *v1.ImposmSyncStatus) []engine.Event {
 	case is != nil && is.Syncing && was != nil && !was.Syncing:
 		out = append(out, engine.Event{Reason: "ProductionResumed", Message: fmt.Sprintf("production (import %d) applies diffs again", is.ImportID)})
 	}
+	if len(st.EmptyTables) > 0 && !slices.Equal(st.EmptyTables, prev.EmptyTables) {
+		out = append(out, engine.Event{Warning: true, Reason: "EmptyTables",
+			Message: "production tables without rows: " + strings.Join(st.EmptyTables, ", ")})
+	}
 	if st.Phase == v1.PhaseConflict && prev.Phase != v1.PhaseConflict {
 		out = append(out, engine.Event{Warning: true, Reason: "Conflict", Message: st.Message})
 	}
 	return out
+}
+
+// diffRanges converts a run's diff ranges for the status.
+func diffRanges(in []engine.DiffRange) []v1.DiffRange {
+	var out []v1.DiffRange
+	for _, d := range in {
+		out = append(out, v1.DiffRange{ImportID: d.ImportID, Production: d.Production, From: d.From, To: d.To,
+			FromTime: metaTime(d.FromTime), ToTime: metaTime(d.ToTime)})
+	}
+	return out
+}
+
+// metaTime converts an optional time for the status.
+func metaTime(t *time.Time) *metav1.Time {
+	if t == nil {
+		return nil
+	}
+	return ptr.To(metav1.NewTime(*t))
+}
+
+// diffsMessage says which diffs a run applied, e.g. "applied 1 diff to
+// production: 4966 (changes up to 2026-11-09T21:22:17Z)".
+func diffsMessage(res *engine.Result) string {
+	if res.DiffsApplied == 0 {
+		return "no new diffs"
+	}
+	noun := "diffs"
+	if res.DiffsApplied == 1 {
+		noun = "diff"
+	}
+	var parts []string
+	for _, d := range res.Diffs {
+		where := fmt.Sprintf("import %d", d.ImportID)
+		if d.Production {
+			where = "production"
+		}
+		seq := fmt.Sprintf("%d-%d", d.From, d.To)
+		if d.From == d.To {
+			seq = fmt.Sprint(d.From)
+		}
+		upTo := ""
+		if d.ToTime != nil {
+			upTo = " (changes up to " + d.ToTime.UTC().Format(time.RFC3339) + ")"
+		}
+		parts = append(parts, where+": "+seq+upTo)
+	}
+	msg := fmt.Sprintf("applied %d %s", res.DiffsApplied, noun)
+	if len(parts) > 0 {
+		msg += " to " + strings.Join(parts, "; ")
+	}
+	return msg
 }
 
 // mapping resolves and merges the mapping sources.
@@ -516,6 +571,7 @@ func applyResult(st *v1.ImposmSyncStatus, res *engine.Result, job string, gen in
 	st.LastJob, st.LastRunTime = job, &t
 	st.LastRunDurationSeconds = res.DurationSeconds
 	st.LastRunDiffs = int32(res.DiffsApplied)
+	st.LastRunDiffRanges = diffRanges(res.Diffs)
 	if res.SnapshotBytes > 0 {
 		st.SnapshotBytes = res.SnapshotBytes
 	}
@@ -544,6 +600,10 @@ func applyResult(st *v1.ImposmSyncStatus, res *engine.Result, job string, gen in
 		st.CurrentSequence = res.CurrentSequence
 		st.Production, st.Reimport = productionStatus(res.Production), reimportStatus(res)
 		st.UnusedTables = capList(res.UnusedTables, 11, 200)
+		if !res.EmptyTablesUnknown {
+			st.EmptyTables = capList(res.EmptyTables, 11, 200)
+			st.EmptyTableCount = int32(res.EmptyTableCount)
+		}
 		if st.Storage != nil {
 			st.Storage.CacheBytes = res.CacheBytes
 		}
@@ -557,7 +617,7 @@ func applyResult(st *v1.ImposmSyncStatus, res *engine.Result, job string, gen in
 		st.ImportHash = res.ImportHash
 	}
 	if res.CurrentTimestamp != nil && !res.StateUnknown {
-		st.CurrentTimestamp = ptr.To(metav1.NewTime(*res.CurrentTimestamp))
+		st.CurrentTimestamp = metaTime(res.CurrentTimestamp)
 	}
 	st.Message = strutil.Truncate(res.Message, 2000)
 	if res.ExpireError != "" {
@@ -572,7 +632,7 @@ func applyResult(st *v1.ImposmSyncStatus, res *engine.Result, job string, gen in
 		return
 	}
 	st.LastSuccessfulRunTime = &t
-	setCond(st, v1.ConditionLastRun, true, "Succeeded", fmt.Sprintf("applied %d diffs", res.DiffsApplied), gen)
+	setCond(st, v1.ConditionLastRun, true, "Succeeded", diffsMessage(res), gen)
 	// Ready: production serves current data, also while a new import is
 	// built next to it.
 	ready, reason := false, string(res.Phase)
@@ -618,12 +678,7 @@ func productionStatus(p *engine.ProductionInfo) *v1.ProductionStatus {
 	if !p.Syncing {
 		out.PausedReason = conditionReason(p.PausedReason)
 	}
-	if p.DeployedAt != nil {
-		out.DeployedAt = ptr.To(metav1.NewTime(*p.DeployedAt))
-	}
-	if p.Timestamp != nil {
-		out.Timestamp = ptr.To(metav1.NewTime(*p.Timestamp))
-	}
+	out.DeployedAt, out.Timestamp = metaTime(p.DeployedAt), metaTime(p.Timestamp)
 	return out
 }
 
@@ -682,6 +737,15 @@ func applyLifecycleConditions(st *v1.ImposmSyncStatus, res *engine.Result, gen i
 			"something depends on these unused tables; drop them by hand: "+strings.Join(res.UnusedTables, ", "), gen)
 	} else {
 		setCond(st, v1.ConditionUnusedTablesKept, false, "None", "", gen)
+	}
+	switch {
+	case res.EmptyTablesUnknown: // keep what an earlier run reported
+	case res.EmptyTableCount > 0:
+		setCond(st, v1.ConditionEmptyTables, true, "NoRows",
+			fmt.Sprintf("production tables without rows (%d; does the mapping match the region's data?): %s",
+				res.EmptyTableCount, strings.Join(res.EmptyTables, ", ")), gen)
+	default:
+		setCond(st, v1.ConditionEmptyTables, false, "None", "", gen)
 	}
 	if res.CacheBytes > 0 && res.DiskTotal > 0 {
 		need := engine.CacheHeadroom(res.CacheBytes)

@@ -146,6 +146,9 @@ type Store interface {
 	// and owned sequences named after it are renamed along. Missing sources
 	// are skipped; an existing target fails the whole move with *TableExists.
 	MoveTables(ctx context.Context, moves []TableMove) error
+	// EmptyTables returns those of tables (schema.table) that exist and have
+	// no rows.
+	EmptyTables(ctx context.Context, tables []string) ([]string, error)
 	Close()
 }
 

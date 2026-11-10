@@ -82,3 +82,36 @@ func TestMoveTablesOnPostgres(t *testing.T) {
 		t.Fatalf("a refused move must move nothing: osm_a=%q", got)
 	}
 }
+
+// TestEmptyTablesOnPostgres: only existing tables without rows are
+// reported, under the names they were asked for (also names that need
+// quoting).
+func TestEmptyTablesOnPostgres(t *testing.T) {
+	if !Available() {
+		t.Skip("docker not available")
+	}
+	d := Docker{T: t}
+	pg, port := d.PostGIS("chaos-empty-pg", "")
+	ctx := context.Background()
+	store, err := state.OpenPostgres(ctx, fmt.Sprintf("host=127.0.0.1 port=%d user=osm password=secret dbname=osm sslmode=disable", port), "imposm_operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if out, err := d.PSQL(pg, "osm", `CREATE SCHEMA rail;
+		CREATE TABLE rail.osm_tracks (id int); INSERT INTO rail.osm_tracks VALUES (1);
+		CREATE TABLE rail.osm_signals (id int);
+		CREATE TABLE "rail"."Odd Name" (id int);`); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	got, err := store.EmptyTables(ctx, []string{"rail.osm_tracks", "rail.osm_signals", "rail.osm_missing", "rail.Odd Name"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != "[rail.osm_signals rail.Odd Name]" {
+		t.Fatalf("empty tables: %v", got)
+	}
+	if got, err := store.EmptyTables(ctx, []string{"rail.osm_missing"}); err != nil || len(got) != 0 {
+		t.Fatalf("only missing: %v %v", got, err)
+	}
+}

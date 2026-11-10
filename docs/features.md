@@ -27,9 +27,11 @@
   mapping names unless `tags.load_all` is set, so such a filter never
   matches) is `MappingValid=False`; a `hstore_tags`/`jsonb_tags` column
   without `tags.load_all` (it holds only the mapped keys) a warning in the
-  condition's message. The runner's imposm adds a `jsonb_tags` column type
-  (all tags, or those in `args.include`, as a JSONB object; no hstore
-  extension needed), see [`containers/patches/`](../containers/patches/).
+  condition's message. After each run, production tables without rows are
+  listed in `status.emptyTables` (condition `EmptyTables`). The runner's
+  imposm adds a `jsonb_tags` column type (all tags, or those in
+  `args.include`, as a JSONB object; no hstore extension needed), see
+  [`containers/patches/`](../containers/patches/).
 - Re-imports without growing lag: while a new import is built (a mapping,
   SRID, prefix, limitTo or schema change, or the `reimport` action),
   production keeps receiving diffs with its own frozen configuration and
@@ -55,6 +57,12 @@
   are not accepted, and in crd and configmap mode `csi` and `nfs` need the
   admin's `runnerPolicy.allowedVolumeTypes` (and `allowedCSIDrivers`): see
   the trust model in [design.md](design.md#trust-model).
+- Status of the data: `status.currentSequence` and `currentTimestamp`
+  (the replication time the data is up to), and per run
+  `status.lastRunDiffRanges`: the diffs it applied (sequences, and the
+  replication times from the data before them to the data after), also in
+  the `LastRunSucceeded` message, e.g. `applied 1 diff to production: 4966
+  (changes up to 2026-11-09T21:22:17Z)`.
 - Monitoring: the controller exports per-sync Prometheus metrics
   (`imposm_sync_lag_seconds`, `_current_sequence`, `_ready`, `_running`,
   `_consecutive_failures`, `_storage_available_bytes`, `_expire_pending`,
