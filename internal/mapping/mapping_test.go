@@ -77,6 +77,14 @@ tables:
 		"bad gen source":  {[]string{table + "generalized_tables: {r_gen: {source: nope, tolerance: 1}}\n"}, `unknown source "nope"`},
 		"bad yaml":        {[]string{"tables: [\n"}, "mapping part a"},
 		"unknown key":     {[]string{table + "apiVersion: v1\n"}, `unknown top-level key "apiVersion"`},
+		"geometry with mapping": {[]string{strings.Replace(table, "type: linestring", "type: geometry", 1)},
+			"type geometry needs type_mappings instead of mapping"},
+		"geometry without type_mappings": {[]string{strings.Replace(strings.Replace(table, "type: linestring", "type: geometry", 1),
+			"mapping: {highway: [__any__]}", "filters: {}", 1)}, "type geometry needs type_mappings"},
+		"bad type_mappings key": {[]string{strings.Replace(strings.Replace(table, "type: linestring", "type: geometry", 1),
+			"mapping: {highway: [__any__]}", "type_mappings: {lines: {highway: [__any__]}}", 1)}, `unknown type_mappings key "lines"`},
+		"empty type_mappings": {[]string{strings.Replace(strings.Replace(table, "type: linestring", "type: geometry", 1),
+			"mapping: {highway: [__any__]}", "type_mappings: {points: {}}", 1)}, "type_mappings matches nothing"},
 	} {
 		var parts []Part
 		for i, p := range tc.parts {
@@ -86,6 +94,22 @@ tables:
 		if err == nil || !strings.Contains(err.Error(), tc.err) {
 			t.Errorf("%s: got %v, want error containing %q", name, err, tc.err)
 		}
+	}
+}
+
+// A type:geometry table selects its objects per geometry with type_mappings.
+func TestGeometryTable(t *testing.T) {
+	part := `
+tables:
+  platforms:
+    type: geometry
+    columns: [{name: osm_id, type: id}, {name: geometry, type: geometry}]
+    type_mappings:
+      linestrings: {railway: [platform]}
+      polygons: {railway: [platform]}
+`
+	if _, err := Merge([]Part{{Name: "a", Data: []byte(part)}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

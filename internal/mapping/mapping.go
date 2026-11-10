@@ -292,12 +292,7 @@ func Validate(doc map[string]any) error {
 			}
 			seen[cname] = true
 		}
-		_, hasMapping := t["mapping"]
-		_, hasMappings := t["mappings"]
-		_, hasRelTypes := t["relation_types"]
-		if !hasMapping && !hasMappings && !hasRelTypes {
-			errs = append(errs, fmt.Errorf("table %q: needs mapping or mappings", name))
-		}
+		errs = append(errs, validateTableMapping(name, typ, t)...)
 	}
 	if g, ok := doc["generalized_tables"]; ok {
 		gen := asMap(g)
@@ -353,6 +348,53 @@ func keys(m map[string]any) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// typeMappingKeys are the sections of type_mappings: the tags matched per
+// geometry of a type:geometry table.
+var typeMappingKeys = map[string]bool{"points": true, "linestrings": true, "polygons": true}
+
+// validateTableMapping checks how a table selects its objects, as imposm
+// does: type:geometry tables only with type_mappings (imposm refuses mapping
+// and mappings there), other tables with mapping, mappings, relation_types
+// or type_mappings (imposm uses the section of the table's own geometry).
+func validateTableMapping(name, typ string, t map[string]any) []error {
+	var errs []error
+	_, hasMapping := t["mapping"]
+	_, hasMappings := t["mappings"]
+	_, hasRelTypes := t["relation_types"]
+	tmV, hasTypeMappings := t["type_mappings"]
+	if hasTypeMappings {
+		tm := asMap(tmV)
+		if tm == nil {
+			errs = append(errs, fmt.Errorf("table %q: type_mappings must be a map", name))
+		}
+		matched := false
+		for _, k := range keys(tm) {
+			if !typeMappingKeys[k] {
+				errs = append(errs, fmt.Errorf("table %q: unknown type_mappings key %q (expected points, linestrings, polygons)", name, k))
+				continue
+			}
+			if len(asMap(tm[k])) > 0 {
+				matched = true
+			}
+		}
+		if tm != nil && !matched {
+			errs = append(errs, fmt.Errorf("table %q: type_mappings matches nothing", name))
+		}
+	}
+	if typ == "geometry" {
+		if hasMapping || hasMappings {
+			errs = append(errs, fmt.Errorf("table %q: type geometry needs type_mappings instead of mapping or mappings", name))
+		} else if !hasTypeMappings {
+			errs = append(errs, fmt.Errorf("table %q: type geometry needs type_mappings", name))
+		}
+		return errs
+	}
+	if !hasMapping && !hasMappings && !hasRelTypes && !hasTypeMappings {
+		errs = append(errs, fmt.Errorf("table %q: needs mapping, mappings or type_mappings", name))
+	}
+	return errs
 }
 
 // LoadDir reads the mapping parts of one directory (see IsPartName), sorted
