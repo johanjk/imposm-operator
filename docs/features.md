@@ -21,6 +21,10 @@
   that reads them, and/or a Redis stream in zaptiles' format. Only tiles of
   committed changes are sent, at least once; `0/0/0` is sent when the changes
   are unknown (e.g. a new import was deployed).
+- Mappings in imposm's format, referenced from ConfigMaps and split into
+  parts. The runner's imposm adds a `jsonb_tags` column type (all tags, or
+  those in `args.include`, as a JSONB object; no hstore extension needed),
+  see [`containers/patches/`](../containers/patches/).
 - Re-imports without growing lag: while a new import is built (a mapping,
   SRID, prefix, limitTo or schema change, or the `reimport` action),
   production keeps receiving diffs with its own frozen configuration and

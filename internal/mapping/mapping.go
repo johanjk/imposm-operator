@@ -222,7 +222,9 @@ func unionList(a, b []any) []any {
 	return out
 }
 
-// Known imposm (v0.14) geometry and column types.
+// Known imposm geometry and column types: those of the runner's imposm
+// (mapping/columns.go AvailableColumnTypes), including jsonb_tags from
+// containers/patches/0002-jsonb-tags.patch.
 var (
 	tableTypes = map[string]bool{
 		"point": true, "linestring": true, "polygon": true, "geometry": true,
@@ -233,7 +235,7 @@ var (
 		"integer": true, "mapping_key": true, "mapping_value": true, "geometry": true,
 		"validated_geometry": true, "hstore_tags": true, "jsonb_tags": true, "wayzorder": true,
 		"pseudoarea": true, "area": true, "webmerc_area": true, "zorder": true,
-		"enumerate": true, "string_suffixreplace": true, "categorize": true,
+		"enumerate": true, "string_suffixreplace": true, "categorize_int": true,
 		"member_id": true, "member_role": true, "member_type": true, "member_index": true,
 		"geojson_intersects": true, "geojson_intersects_feature": true,
 	}
