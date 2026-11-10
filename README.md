@@ -80,4 +80,8 @@ Edit the spec and the operator does the least work that gets there:
 
 [docs/](docs/README.md): deployment options, features, design, development.
 
-Map data in `test/fixtures` © OpenStreetMap contributors, ODbL.
+## License
+
+[MIT](LICENSE). Map data in `test/fixtures` © OpenStreetMap contributors,
+ODbL. The runner image includes [imposm](https://github.com/omniscale/imposm3)
+(Apache-2.0).

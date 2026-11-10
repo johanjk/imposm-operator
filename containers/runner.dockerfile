@@ -53,4 +53,5 @@ ENV HOME=/var/lib/imposm-operator/data
 ENTRYPOINT ["/usr/local/bin/imposm-operator"]
 CMD ["run"]
 LABEL org.opencontainers.image.source=https://github.com/johanjk/imposm-operator \
+      org.opencontainers.image.licenses=MIT \
       org.opencontainers.image.description="imposm-operator runner (imposm + sync engine)"

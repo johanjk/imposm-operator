@@ -22,4 +22,5 @@ COPY --from=build /out/imposm-operator /imposm-operator
 USER 65532:65532
 ENTRYPOINT ["/imposm-operator"]
 CMD ["controller"]
-LABEL org.opencontainers.image.source=https://github.com/johanjk/imposm-operator
+LABEL org.opencontainers.image.source=https://github.com/johanjk/imposm-operator \
+      org.opencontainers.image.licenses=MIT

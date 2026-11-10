@@ -8,3 +8,5 @@ home: https://github.com/johanjk/imposm-operator
 sources:
   - https://github.com/johanjk/imposm-operator
 keywords: [openstreetmap, osm, imposm, postgis, operator]
+annotations:
+  artifacthub.io/license: MIT

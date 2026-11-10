@@ -4,3 +4,5 @@ description: The ImposmSync CRD for imposm-operator (mode=crd). Installed once p
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+annotations:
+  artifacthub.io/license: MIT
