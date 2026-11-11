@@ -5,7 +5,7 @@
 # .github/dependabot.yml).
 # Pure Go: built on the build machine's platform, cross-compiled for the
 # target (no emulation for multi-platform builds).
-FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS build
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 # set by docker/metadata-action in CI (the image version)

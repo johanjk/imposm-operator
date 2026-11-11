@@ -9,7 +9,7 @@
 # SourceGeneralized). Move back to a tag once a release contains the fix.
 ARG IMPOSM_REF=3d25f252a2d7627e1a2600b281c46cc8ec183698
 
-FROM golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473 AS imposm
+FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS imposm
 ARG IMPOSM_REF
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgeos-dev libleveldb-dev \
@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 # Pure Go: cross-compiled like the controller. (The imposm stage above
 # needs cgo and is built on the target platform.)
-FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473 AS operator
+FROM --platform=$BUILDPLATFORM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS operator
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 # set by docker/metadata-action in CI (the image version)
