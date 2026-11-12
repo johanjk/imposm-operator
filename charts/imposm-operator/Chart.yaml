@@ -2,8 +2,8 @@ apiVersion: v2
 name: imposm-operator
 description: Keep PostGIS databases in sync with OpenStreetMap using imposm, as an operator or without CRDs.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 home: https://github.com/johanjk/imposm-operator
 sources:
   - https://github.com/johanjk/imposm-operator
