@@ -138,7 +138,8 @@ pending ─download─▶ downloaded ─imposm -read─▶ read ─imposm -write
   the commit, but needs the opposite treatment: rolling the cache back would
   replay the chunk's creates and duplicate rows. When a chunk ends without a
   recorded commit, the engine checks the database using the chunk's net
-  effect (`osm.SummarizeChanges`):
+  effect (`summarizeChanges` in `internal/engine/changes.go`, over
+  `osmmeta.ReadChange`):
   - an object the chunk created is present → committed (keep the cache,
     advance `last.state.txt`);
   - an object the chunk deleted is still present, or a created node that

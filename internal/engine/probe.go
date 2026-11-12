@@ -65,7 +65,7 @@ const probeBatch = 5000
 
 func (p *DBProbe) Committed(ctx context.Context, tgt ProbeTarget, from, to int64, files []string) (bool, bool, error) {
 	schema := tgt.Schema
-	objs, err := osm.SummarizeChangeFiles(files)
+	objs, err := summarizeChanges(files)
 	if err != nil {
 		return false, false, err
 	}
@@ -145,7 +145,7 @@ func (p *DBProbe) Committed(ctx context.Context, tgt ProbeTarget, from, to int64
 	return false, false, nil
 }
 
-func appendKind(o *osm.ChangeObj, nodes, ways, rels []int64) ([]int64, []int64, []int64) {
+func appendKind(o *changeObj, nodes, ways, rels []int64) ([]int64, []int64, []int64) {
 	switch o.Kind {
 	case "node":
 		nodes = append(nodes, o.ID)

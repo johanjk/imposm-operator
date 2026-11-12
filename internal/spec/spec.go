@@ -25,6 +25,8 @@ import (
 
 	v1 "github.com/johanjk/imposm-operator/api/v1alpha1"
 	"github.com/johanjk/imposm-operator/internal/limitto"
+	"github.com/johanjk/imposm-operator/internal/osmmeta"
+	"github.com/johanjk/imposm-operator/internal/strutil"
 )
 
 // MaxSpecSize bounds decoded specs.
@@ -106,10 +108,18 @@ func Default(s *v1.ImposmSyncSpec) {
 	if s.Runner.ActiveDeadline == nil {
 		s.Runner.ActiveDeadline = &metav1.Duration{Duration: 24 * time.Hour}
 	}
+	if m := s.Metadata; m != nil {
+		def(&m.Elements, v1.MetadataElementsTagged)
+		def(&m.Schema, s.Database.Schemas.Production+"_history")
+		def(&m.History.Mode, v1.HistoryModeNone)
+		def(&m.Changesets.ReplicationURL, "https://planet.openstreetmap.org/replication/changesets/")
+		if m.Changesets.MaxFilesPerRun == 0 {
+			m.Changesets.MaxFilesPerRun = 1500
+		}
+	}
 }
 
 var (
-	identRe   = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 	prefixRe  = regexp.MustCompile(`^[a-z][a-z0-9]{0,19}_?$`)
 	cronParse = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 )
@@ -130,18 +140,13 @@ func Validate(s *v1.ImposmSyncSpec, p *field.Path) field.ErrorList {
 	sp := p.Child("source")
 	// The spec is not secret (status, logs, the state database show the
 	// URLs): credentials in them are refused.
-	checkURL := func(name, raw string) {
-		u, err := url.Parse(raw)
-		switch {
-		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
-			add(field.Invalid(sp.Child(name), raw, "must be an absolute http(s) URL"))
-		case u.User != nil:
-			add(field.Invalid(sp.Child(name), u.Redacted(), "must not contain credentials"))
-		}
+	if e := checkURL(sp.Child("baseURL"), s.Source.BaseURL); e != nil {
+		add(e)
 	}
-	checkURL("baseURL", s.Source.BaseURL)
 	if r := s.Source.ReplicationBaseURL; r != "" {
-		checkURL("replicationBaseURL", r)
+		if e := checkURL(sp.Child("replicationBaseURL"), r); e != nil {
+			add(e)
+		}
 	}
 	for name, v := range map[string]string{"pbfPath": s.Source.PBFPath, "replicationPath": s.Source.ReplicationPath} {
 		if err := relPath(v); err != "" {
@@ -189,7 +194,7 @@ func Validate(s *v1.ImposmSyncSpec, p *field.Path) field.ErrorList {
 	seen := map[string]string{}
 	for _, name := range []string{"import", "production", "backup", "state"} {
 		v := schemas[name]
-		if !identRe.MatchString(v) || strings.HasPrefix(v, "pg_") {
+		if !strutil.IsUserSchema(v) {
 			add(field.Invalid(dp.Child("schemas", name), v, "must be a lower-case SQL identifier (not pg_*)"))
 		}
 		if other, dup := seen[v]; dup {
@@ -348,6 +353,9 @@ func Validate(s *v1.ImposmSyncSpec, p *field.Path) field.ErrorList {
 			add(field.Invalid(rp.Child("annotations").Key(k), k, "reserved for the operator"))
 		}
 	}
+	if m := s.Metadata; m != nil {
+		validateMetadata(s, m, p.Child("metadata"), add)
+	}
 	// The database and Redis ports reach internal addresses, the upstream
 	// ports public ones only: one port in both would open internal HTTP
 	// services (and cloud metadata) to the upstream rule's traffic.
@@ -469,4 +477,84 @@ func TablePrefix(s *v1.ImposmSyncSpec) string {
 		p += "_"
 	}
 	return p
+}
+
+func validateMetadata(s *v1.ImposmSyncSpec, m *v1.MetadataSpec, mp *field.Path, add func(*field.Error)) {
+	if !slices.Contains([]string{v1.MetadataElementsNone, v1.MetadataElementsTagged, v1.MetadataElementsAll}, m.Elements) {
+		add(field.NotSupported(mp.Child("elements"), m.Elements, []string{"none", "tagged", "all"}))
+	}
+	if m.Elements == v1.MetadataElementsNone && !m.Changesets.Enabled {
+		add(field.Invalid(mp, "", "keeps nothing: set elements or enable changesets"))
+	}
+	if !strutil.IsUserSchema(m.Schema) {
+		add(field.Invalid(mp.Child("schema"), m.Schema, "must be a lower-case SQL identifier (not pg_*)"))
+	}
+	sch := s.Database.Schemas
+	if slices.Contains([]string{sch.Import, sch.Production, sch.Backup, sch.State}, m.Schema) {
+		add(field.Invalid(mp.Child("schema"), m.Schema, "must differ from database.schemas (imposm's deploy rotates whole schemas)"))
+	}
+	hp := mp.Child("history")
+	if !slices.Contains([]string{v1.HistoryModeNone, v1.HistoryModeVersions, v1.HistoryModeFull}, m.History.Mode) {
+		add(field.NotSupported(hp.Child("mode"), m.History.Mode, []string{"none", "versions", "full"}))
+	}
+	if m.History.Mode != v1.HistoryModeNone && m.Elements == v1.MetadataElementsNone {
+		add(field.Invalid(hp.Child("mode"), m.History.Mode, "needs elements (tagged or all)"))
+	}
+	r := m.History.Retention
+	rp := hp.Child("retention")
+	for name, v := range map[string]string{"maxAge": r.MaxAge, "deleted": r.Deleted, "content": r.Content} {
+		if _, err := osmmeta.ParseDuration(v); err != nil {
+			add(field.Invalid(rp.Child(name), v, "must be <n>d or <n>h"))
+		}
+	}
+	if r.MaxVersions < 0 {
+		add(field.Invalid(rp.Child("maxVersions"), r.MaxVersions, "must not be negative"))
+	}
+	if (r.MaxAge != "" || r.MaxVersions > 0) && m.History.Mode == v1.HistoryModeNone {
+		add(field.Invalid(rp, "", "maxAge and maxVersions need history.mode versions or full"))
+	}
+	if r.Content != "" && m.History.Mode != v1.HistoryModeFull {
+		add(field.Invalid(rp.Child("content"), r.Content, "needs history.mode full"))
+	}
+	if r.Deleted != "" && m.Elements == v1.MetadataElementsNone {
+		add(field.Invalid(rp.Child("deleted"), r.Deleted, "needs elements (tagged or all)"))
+	}
+	if m.History.IndexTags && m.History.Mode != v1.HistoryModeFull {
+		add(field.Invalid(hp.Child("indexTags"), true, "needs history.mode full"))
+	}
+	cp := mp.Child("changesets")
+	c := m.Changesets
+	if c.Enabled {
+		if e := checkURL(cp.Child("replicationURL"), c.ReplicationURL); e != nil {
+			add(e)
+		}
+		if c.BBox == "" && m.Elements == v1.MetadataElementsNone {
+			add(field.Required(cp.Child("bbox"), "without element metadata the snapshot's bbox is not read"))
+		}
+	}
+	if c.BBox != "" {
+		if _, err := osmmeta.ParseBBox(c.BBox); err != nil {
+			add(field.Invalid(cp.Child("bbox"), c.BBox, err.Error()))
+		}
+	}
+	if _, err := osmmeta.ParseDuration(c.Retention); err != nil {
+		add(field.Invalid(cp.Child("retention"), c.Retention, "must be <n>d or <n>h"))
+	}
+	if c.MaxFilesPerRun < 1 || c.MaxFilesPerRun > 100000 {
+		add(field.Invalid(cp.Child("maxFilesPerRun"), c.MaxFilesPerRun, "must be 1-100000"))
+	}
+}
+
+// checkURL refuses a URL that is not absolute http(s), or that holds
+// credentials (the spec is not secret: status, logs and the state database
+// show the URLs).
+func checkURL(path *field.Path, raw string) *field.Error {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "":
+		return field.Invalid(path, raw, "must be an absolute http(s) URL")
+	case u.User != nil:
+		return field.Invalid(path, u.Redacted(), "must not contain credentials")
+	}
+	return nil
 }

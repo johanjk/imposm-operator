@@ -8,7 +8,6 @@ import (
 	"hash/fnv"
 	"io/fs"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -18,12 +17,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/johanjk/imposm-operator/internal/strutil"
 )
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
-
-var identRe = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 // Postgres is the production Store.
 type Postgres struct {
@@ -34,7 +33,7 @@ type Postgres struct {
 
 // OpenPostgres connects; schema is the bookkeeping schema (validated).
 func OpenPostgres(ctx context.Context, connString, schema string) (*Postgres, error) {
-	if !identRe.MatchString(schema) {
+	if !strutil.IsIdent(schema) {
 		return nil, fmt.Errorf("state: invalid schema name %q", schema)
 	}
 	cfg, err := pgxpool.ParseConfig(connString)

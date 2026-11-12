@@ -84,6 +84,17 @@ func ReadPBFHeaderFile(path string) (PBFHeader, error) {
 // removed from the header block. Used to build test fixtures that exercise the
 // timestamp -> sequence fallback. keepTimestamp retains the timestamp field.
 func StripReplicationHeader(r io.Reader, w io.Writer, keepTimestamp bool) error {
+	return rewriteReplicationHeader(r, w, keepTimestamp, 0, "")
+}
+
+// SetReplicationHeader copies a PBF from r to w with its replication
+// sequence and base URL replaced (the timestamp is kept). Used to build test
+// fixtures whose header names another replication stream.
+func SetReplicationHeader(r io.Reader, w io.Writer, sequence int64, baseURL string) error {
+	return rewriteReplicationHeader(r, w, true, sequence, baseURL)
+}
+
+func rewriteReplicationHeader(r io.Reader, w io.Writer, keepTimestamp bool, sequence int64, baseURL string) error {
 	blobType, blob, err := readBlob(r)
 	if err != nil {
 		return err
@@ -115,6 +126,14 @@ func StripReplicationHeader(r io.Reader, w io.Writer, keepTimestamp bool) error 
 	})
 	if err != nil {
 		return err
+	}
+	if sequence != 0 {
+		hb = protowire.AppendTag(hb, fieldReplSequence, protowire.VarintType)
+		hb = protowire.AppendVarint(hb, uint64(sequence))
+	}
+	if baseURL != "" {
+		hb = protowire.AppendTag(hb, fieldReplBaseURL, protowire.BytesType)
+		hb = protowire.AppendString(hb, baseURL)
 	}
 	var newBlob []byte
 	newBlob = protowire.AppendTag(newBlob, 1, protowire.BytesType) // raw

@@ -620,6 +620,7 @@ func applyResult(st *v1.ImposmSyncStatus, res *engine.Result, job string, gen in
 		st.CurrentTimestamp = metaTime(res.CurrentTimestamp)
 	}
 	st.Message = strutil.Truncate(res.Message, 2000)
+	applyMetadata(st, res, gen)
 	if res.ExpireError != "" {
 		setCond(st, "ExpireTilesDelivered", false, "SinkFailed", res.ExpireError, gen)
 	} else if res.ExpirePending == 0 {
@@ -942,5 +943,34 @@ func deletedOnly() predicate.Funcs {
 		UpdateFunc:  func(event.UpdateEvent) bool { return false },
 		DeleteFunc:  func(event.DeleteEvent) bool { return true },
 		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+// applyMetadata reports the metadata tables from a run that got to them; a
+// successful sync without them (spec.metadata unset) clears the report.
+func applyMetadata(st *v1.ImposmSyncStatus, res *engine.Result, gen int64) {
+	m := res.Metadata
+	if m == nil {
+		if res.Error == "" && !res.StateUnknown && (res.Action == engine.ActionSync || res.Action == engine.ActionReimport) {
+			st.Metadata = nil
+			apimeta.RemoveStatusCondition(&st.Conditions, v1.ConditionMetadataValid)
+			apimeta.RemoveStatusCondition(&st.Conditions, v1.ConditionMetadataCurrent)
+		}
+		return
+	}
+	st.Metadata = &v1.MetadataStatus{Sequence: m.Sequence, Timestamp: metaTime(m.Timestamp), Elements: m.Elements,
+		HistoryRows: m.HistoryRows, HistoryOldest: metaTime(m.HistoryOldest),
+		ChangesetSequence: m.ChangesetSequence, ChangesetTimestamp: metaTime(m.ChangesetTimestamp),
+		Changesets: m.Changesets, ChangesetsMissing: m.ChangesetsMissing,
+		LastPruned: metaTime(m.LastPruned), PrunedRows: m.PrunedRows, Message: strutil.Truncate(m.Message, 500)}
+	if m.Invalid != "" {
+		setCond(st, v1.ConditionMetadataValid, false, "NoMetadataInSource", m.Invalid, gen)
+	} else {
+		setCond(st, v1.ConditionMetadataValid, true, "Valid", "", gen)
+	}
+	if m.Current {
+		setCond(st, v1.ConditionMetadataCurrent, true, "Current", "", gen)
+	} else {
+		setCond(st, v1.ConditionMetadataCurrent, false, "Behind", strutil.Truncate(m.Message, 500), gen)
 	}
 }

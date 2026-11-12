@@ -58,6 +58,9 @@ Every series has the labels `namespace` and `name` (of the ImposmSync, or of the
 | `imposm_sync_reimport_headroom` | gauge | 1 when the data volume has room for a second imposm cache (1.2× production's cache). Then a re-import under `syncDuringReimport: auto` keeps production syncing; at 0 it would pause production until the new import is deployed. The series is absent until production's cache size is known. |
 | `imposm_sync_unused_tables` | gauge | Tables the sync no longer uses but kept because something depends on them (`status.unusedTables`). |
 | `imposm_sync_empty_tables` | gauge | Production tables without rows (`status.emptyTableCount`; `status.emptyTables` lists up to 11). |
+| `imposm_sync_metadata_lag_seconds` | gauge | Production's data time minus the element metadata's (`spec.metadata`; see [design-osm-metadata.md](design-osm-metadata.md)). |
+| `imposm_sync_changesets_missing` | gauge | Changesets of recent element metadata not kept (`status.metadata.changesetsMissing`). |
+| `imposm_sync_history_pruned_rows` | gauge | Rows the last metadata retention pass deleted or cleared. |
 
 ### Storage and expire tiles
 
@@ -94,6 +97,8 @@ With the Prometheus Operator installed (`prometheusRule.enabled: auto`), the cha
 | `ImposmSyncNoReimportHeadroom` | info | `reimport_headroom` == 0 for 1 h | |
 | `ImposmSyncUnusedTablesKept` | info | `unused_tables` > 0 for 1 h | |
 | `ImposmSyncEmptyTables` | info | `empty_tables` > 0 for 1 h | |
+| `ImposmSyncMetadataBehind` | warning | `metadata_lag_seconds` > 2 h for 2 h | |
+| `ImposmSyncChangesetsMissing` | info | `changesets_missing` > 0 for 1 d | |
 
 Pick `lag` to match the update frequency. The default fits daily diffs; use something like `3h` for hourly diffs and `30m` for minutely ones. A full import or a long re-import with production paused also raises lag, so `ImposmSyncProductionPaused` usually fires first.
 
@@ -115,6 +120,8 @@ Pick `lag` to match the update frequency. The default fits daily diffs; use some
 - **ProductionPaused:** `status.production.pausedReason` and its message say why. `NoRoom` clears once the new import is deployed; to avoid it next time, grow `storage.size` until `ReimportHeadroom` is true. `Disabled` is `syncDuringReimport: never`. `Reverted` waits for the `deploy` or `reimport` action. `Failed`: production's own diffs failed while a new import is built; the import goes on and replaces production, the run reports the error.
 - **NoReimportHeadroom:** informational. The next re-import (a mapping, SRID, limitTo or source change) will pause production until its deploy. Grow `storage.size` if that is not acceptable.
 - **EmptyTables:** `status.emptyTables` lists production tables without rows. Usually the mapping matches nothing in the region (a value the data does not use, or a tag that is tagged differently there); check the table's mapping and filters against the data (e.g. taginfo for the region). A table that is expected to be empty in this region can be left as is.
+- **MetadataBehind:** `status.metadata.message` and the `MetadataCurrent` condition say why: a failing diff chunk, a diff missing upstream, or a snapshot still newer than production (it waits). `MetadataValid=False` means changesets are on but the source has no changeset ids: switch `source` to one with full metadata, or turn `metadata.changesets` off to keep versions and timestamps only. imposm's tables are not affected.
+- **ChangesetsMissing:** a gap in the changeset replication (the `MetadataCurrent` message names the file), or changesets whose bbox lies outside `metadata.changesets.bbox`.
 - **UnusedTablesKept:** `status.unusedTables` lists them. Drop each table (and the view or foreign key that uses it) by hand once it is no longer needed.
 
 ## Useful queries

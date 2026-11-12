@@ -74,3 +74,35 @@ func TestEmptyTablesWithoutProduction(t *testing.T) {
 		t.Fatalf("%+v %v", c, st.EmptyTables)
 	}
 }
+
+// The metadata report and its conditions follow the runs; a sync without
+// metadata clears them.
+func TestApplyResultMetadata(t *testing.T) {
+	ts := time.Date(2026, 11, 10, 21, 21, 39, 0, time.UTC)
+	st := &v1.ImposmSyncStatus{}
+	applyResult(st, &engine.Result{Action: engine.ActionSync, Phase: v1.PhaseSyncing,
+		Metadata: &engine.MetadataResult{Invalid: "snapshot: no changeset ids", Message: "element metadata: snapshot: no changeset ids"}}, "j1", 1)
+	if c := findCond(st.Conditions, v1.ConditionMetadataValid); c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("valid: %+v", c)
+	}
+	if c := findCond(st.Conditions, v1.ConditionMetadataCurrent); c == nil || c.Status != metav1.ConditionFalse || c.Message == "" {
+		t.Fatalf("current: %+v", c)
+	}
+	applyResult(st, &engine.Result{Action: engine.ActionSync, Phase: v1.PhaseSyncing,
+		Metadata: &engine.MetadataResult{Current: true, Sequence: 4967, Timestamp: &ts, Elements: 15, ChangesetsMissing: 2}}, "j2", 1)
+	if m := st.Metadata; m == nil || m.Sequence != 4967 || !m.Timestamp.Time.Equal(ts) || m.Elements != 15 || m.ChangesetsMissing != 2 {
+		t.Fatalf("status: %+v", m)
+	}
+	if c := findCond(st.Conditions, v1.ConditionMetadataCurrent); c.Status != metav1.ConditionTrue {
+		t.Fatalf("current: %+v", c)
+	}
+	// a deploy action does not touch it; a sync without metadata clears it
+	applyResult(st, &engine.Result{Action: engine.ActionDeploy, Phase: v1.PhaseSyncing}, "j3", 1)
+	if st.Metadata == nil {
+		t.Fatal("cleared by a deploy action")
+	}
+	applyResult(st, &engine.Result{Action: engine.ActionSync, Phase: v1.PhaseSyncing}, "j4", 1)
+	if st.Metadata != nil || findCond(st.Conditions, v1.ConditionMetadataValid) != nil || findCond(st.Conditions, v1.ConditionMetadataCurrent) != nil {
+		t.Fatalf("not cleared: %+v %+v", st.Metadata, st.Conditions)
+	}
+}

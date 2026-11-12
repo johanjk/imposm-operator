@@ -24,6 +24,7 @@ import (
 	"github.com/johanjk/imposm-operator/internal/expire"
 	"github.com/johanjk/imposm-operator/internal/imposm"
 	"github.com/johanjk/imposm-operator/internal/mapping"
+	"github.com/johanjk/imposm-operator/internal/osmmeta"
 	"github.com/johanjk/imposm-operator/internal/pgconf"
 	"github.com/johanjk/imposm-operator/internal/spec"
 	"github.com/johanjk/imposm-operator/internal/state"
@@ -219,6 +220,9 @@ func Run(ctx context.Context, o Options, log *slog.Logger) (*engine.Result, erro
 		LimitTo:  limit,
 		Progress: progress,
 		Log:      log,
+	}
+	if err := Metadata(e, name, s, store, dl); err != nil {
+		return nil, err
 	}
 	log.Info("starting run", "name", name, "action", action, "db", db, "upstream", up.ReplicationURL)
 	res := e.Run(ctx, action)
@@ -426,4 +430,67 @@ func capTexts(r *engine.Result, n int) {
 		rc.Phase, rc.Reason = strutil.Truncate(rc.Phase, n), strutil.Truncate(rc.Reason, n)
 		r.Reimport = &rc
 	}
+}
+
+// Metadata sets up the metadata tables of spec.metadata on e (nothing when
+// it is unset).
+func Metadata(e *engine.Engine, name string, s *v1.ImposmSyncSpec, store *state.Postgres, dl *download.Client) error {
+	md, owner := s.Metadata, s.Database.Schemas.State+"/"+name
+	if md == nil {
+		e.DropMetadataViews = func(ctx context.Context) error { return osmmeta.DropOwnerViews(ctx, store.Pool(), owner) }
+		return nil
+	}
+	cfg, err := MetadataConfig(owner, md)
+	if err != nil {
+		return err
+	}
+	st, err := osmmeta.NewPostgres(store.Pool(), cfg)
+	if err != nil {
+		return err
+	}
+	e.Metadata, e.MetadataElements = st, cfg.Elements
+	if md.Changesets.Enabled {
+		u := md.Changesets.ReplicationURL
+		if !strings.HasSuffix(u, "/") {
+			u += "/"
+		}
+		e.Changesets = &osmmeta.ChangesetSource{URL: u, Get: dlGetter{dl}}
+	}
+	return nil
+}
+
+// MetadataConfig is the osmmeta configuration of spec.metadata; owner
+// identifies the sync database-wide (state schema/name, as its table claims).
+func MetadataConfig(owner string, md *v1.MetadataSpec) (osmmeta.Config, error) {
+	c := osmmeta.Config{Schema: md.Schema, Owner: owner,
+		Elements: md.Elements != v1.MetadataElementsNone, AllNodes: md.Elements == v1.MetadataElementsAll,
+		IndexTags: md.History.IndexTags, Changesets: md.Changesets.Enabled, IndexText: md.Changesets.IndexText,
+		Retention: osmmeta.Retention{MaxVersions: int(md.History.Retention.MaxVersions)}}
+	if c.Elements && md.History.Mode != v1.HistoryModeNone {
+		c.History = md.History.Mode
+	}
+	r := md.History.Retention
+	for _, d := range []struct {
+		dst *time.Duration
+		v   string
+	}{{&c.Retention.MaxAge, r.MaxAge}, {&c.Retention.Deleted, r.Deleted}, {&c.Retention.Content, r.Content},
+		{&c.ChangesetRetention, md.Changesets.Retention}} {
+		var err error
+		if *d.dst, err = osmmeta.ParseDuration(d.v); err != nil {
+			return osmmeta.Config{}, err
+		}
+	}
+	return c, nil
+}
+
+// dlGetter serves osmmeta from the operator's download client (timeouts,
+// retries), mapping its not-found error.
+type dlGetter struct{ dl *download.Client }
+
+func (g dlGetter) Get(ctx context.Context, url string, limit int64) ([]byte, error) {
+	b, err := g.dl.Get(ctx, url, limit)
+	if errors.Is(err, download.ErrNotFound) {
+		return nil, fmt.Errorf("%w: %w", osmmeta.ErrNotFound, err)
+	}
+	return b, err
 }

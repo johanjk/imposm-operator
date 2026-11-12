@@ -14,7 +14,7 @@ export CGO_ENABLED ?= 0
 
 FUZZ_TARGETS = \
 	./internal/osm:FuzzParseState ./internal/osm:FuzzSeqPath ./internal/osm:FuzzParseSeqPath \
-	./internal/osm:FuzzParseMD5 ./internal/osm:FuzzPBFHeader ./internal/osm:FuzzSummarizeChanges \
+	./internal/osm:FuzzParseMD5 ./internal/osm:FuzzPBFHeader ./internal/osmmeta:FuzzReadChange \
 	./internal/pgconf:FuzzPgpassParse ./internal/pgconf:FuzzPgpassMatch \
 	./internal/mapping:FuzzMappingMerge ./internal/imposm:FuzzArgs ./internal/spec:FuzzSpecDecode \
 	./internal/expire:FuzzSplitLines ./internal/limitto:FuzzValidate \

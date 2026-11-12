@@ -251,3 +251,31 @@ tables:
 		t.Fatalf("%v %v", err, r.Warnings)
 	}
 }
+
+func TestKeyColumns(t *testing.T) {
+	part := `
+tables:
+  roads:
+    type: linestring
+    columns: [{name: id, type: id}, {name: name, key: name, type: string}, {name: geom, type: validated_geometry}]
+    mapping: {highway: [primary]}
+  members:
+    type: relation_member
+    columns: [{name: osm_id, type: id}, {name: member, type: member_id}]
+    relation_types: [route]
+    mapping: {route: [train]}
+generalized_tables:
+  roads_gen1: {source: roads, tolerance: 10}
+  roads_gen0: {source: roads_gen1, tolerance: 100}
+`
+	r, err := Merge([]Part{{Name: "a", Data: []byte(part)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for table, want := range map[string][2]string{"roads": {"id", "geom"}, "roads_gen0": {"id", "geom"},
+		"members": {"osm_id", ""}, "missing": {"", ""}} {
+		if id, geom := r.KeyColumns(table); id != want[0] || geom != want[1] {
+			t.Errorf("%s: %q %q, want %q", table, id, geom, want)
+		}
+	}
+}

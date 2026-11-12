@@ -64,4 +64,16 @@ spec:
           labels: {severity: info}
           annotations:
             summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: {{`{{ $value }}`}} production tables have no rows; see status.emptyTables"
+        - alert: ImposmSyncMetadataBehind
+          expr: imposm_sync_metadata_lag_seconds > 7200
+          for: 2h
+          labels: {severity: warning}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: element metadata is {{`{{ $value | humanizeDuration }}`}} behind production; see status.metadata.message"
+        - alert: ImposmSyncChangesetsMissing
+          expr: imposm_sync_changesets_missing > 0
+          for: 1d
+          labels: {severity: info}
+          annotations:
+            summary: "imposm sync {{`{{ $labels.namespace }}/{{ $labels.name }}`}}: {{`{{ $value }}`}} changesets of recent edits are missing (changeset replication gap, or outside the bbox)"
 {{- end }}

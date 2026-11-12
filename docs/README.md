@@ -14,6 +14,9 @@
 - [State machines](state-machine.md): Mermaid diagrams of the import
   lifecycle, production during a re-import, the sync phase and one run.
 - [Development](development.md): building and testing.
+- [OSM metadata, changesets and audit trails](design-osm-metadata.md):
+  `spec.metadata`: changeset ids, element versions, history and changesets
+  next to imposm's tables (package `internal/osmmeta`).
 - [Problems found by the tests](imposm-issues.md): imposm bugs the tests
   found, and how the operator works around them.
 

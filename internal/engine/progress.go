@@ -58,6 +58,7 @@ const (
 	StepDownloadDiffs    = "download-diffs"
 	StepDiff             = "diff"
 	StepExpire           = "expire-tiles"
+	StepMetadata         = "metadata"
 	StepDone             = "done"
 )
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -313,5 +314,46 @@ func TestDatabaseFromSecret(t *testing.T) {
 	s.Database.SecretRef = nil
 	if e := Egress(s); e.Database != 0 {
 		t.Fatalf("egress with a socket host: %+v", e)
+	}
+}
+
+func TestMetadata(t *testing.T) {
+	s, err := Decode([]byte(minimal + "metadata: {history: {mode: full, retention: {maxAge: 3650d, content: 365d}}, changesets: {enabled: true}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := s.Metadata
+	if m.Elements != "tagged" || m.Schema != s.Database.Schemas.Production+"_history" || m.Changesets.MaxFilesPerRun != 1500 ||
+		m.Changesets.ReplicationURL != "https://planet.openstreetmap.org/replication/changesets/" {
+		t.Fatalf("defaults: %+v", m)
+	}
+	if e := Egress(s); !slices.Contains(e.Upstream, 443) {
+		t.Errorf("egress %+v", e)
+	}
+	for name, mut := range map[string]func(*v1.MetadataSpec){
+		"nothing kept":          func(m *v1.MetadataSpec) { m.Elements, m.Changesets.Enabled = "none", false },
+		"history without elems": func(m *v1.MetadataSpec) { m.Elements = "none" },
+		"schema clash":          func(m *v1.MetadataSpec) { m.Schema = "public" },
+		"bad schema":            func(m *v1.MetadataSpec) { m.Schema = "Bad-Name" },
+		"bad duration":          func(m *v1.MetadataSpec) { m.History.Retention.MaxAge = "10y" },
+		"content without full":  func(m *v1.MetadataSpec) { m.History.Mode = "versions" },
+		"bad bbox":              func(m *v1.MetadataSpec) { m.Changesets.BBox = "10,60,5,70" },
+		"credentials":           func(m *v1.MetadataSpec) { m.Changesets.ReplicationURL = "https://u:p@x.example/" },
+		"bad mode":              func(m *v1.MetadataSpec) { m.History.Mode = "all" },
+		"no area":               func(m *v1.MetadataSpec) { m.Elements, m.History = "none", v1.HistorySpec{Mode: "none"} },
+	} {
+		c := s.DeepCopy()
+		mut(c.Metadata)
+		if errs := Validate(c, nil); len(errs) == 0 {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if errs := Validate(s, nil); len(errs) != 0 {
+		t.Fatalf("valid spec refused: %v", errs)
+	}
+	c := s.DeepCopy()
+	c.Metadata.Changesets.ReplicationURL = "https://changesets.example:8443/"
+	if e := Egress(c); !slices.Contains(e.Upstream, 8443) {
+		t.Errorf("changeset port not opened: %+v", e)
 	}
 }

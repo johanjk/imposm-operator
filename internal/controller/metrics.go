@@ -38,6 +38,9 @@ var (
 	mProdPaused   = gauge("production_paused", "1 while production does not apply diffs, by reason.", "reason")
 	mUnused       = gauge("unused_tables", "Unused tables kept because something depends on them.")
 	mEmpty        = gauge("empty_tables", "Production tables without rows.")
+	mMetaLag      = gauge("metadata_lag_seconds", "Production's data time minus the element metadata's (spec.metadata).")
+	mMetaMissing  = gauge("changesets_missing", "Changesets referenced by recent element metadata but not kept.")
+	mMetaPruned   = gauge("history_pruned_rows", "Rows the last metadata retention pass deleted or cleared.")
 	mHeadroom     = gauge("reimport_headroom", "1 when the volume fits a second imposm cache, so a re-import keeps production syncing.")
 
 	mRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -48,7 +51,7 @@ var (
 	}, syncLabels)
 
 	allSyncMetrics = []prometheus.Collector{mLag, mCurrentSeq, mUpstreamSeq, mReady, mRunning, mPhase, mLastRun,
-		mLastSuccess, mLastDuration, mNextRun, mFailures, mExpire, mStorageUsed, mStorageAvail, mStorageTotal, mReimport, mProdPaused, mUnused, mEmpty, mHeadroom, mRuns, mDiffs}
+		mLastSuccess, mLastDuration, mNextRun, mFailures, mExpire, mStorageUsed, mStorageAvail, mStorageTotal, mReimport, mProdPaused, mUnused, mEmpty, mMetaLag, mMetaMissing, mMetaPruned, mHeadroom, mRuns, mDiffs}
 )
 
 func init() { metrics.Registry.MustRegister(allSyncMetrics...) }
@@ -85,6 +88,17 @@ func recordMetrics(s *Sync, source string) {
 	}
 	set(mUnused, float64(len(st.UnusedTables)))
 	set(mEmpty, float64(st.EmptyTableCount))
+	if m := st.Metadata; m != nil {
+		if m.Timestamp != nil && st.CurrentTimestamp != nil {
+			set(mMetaLag, max(0, st.CurrentTimestamp.Sub(m.Timestamp.Time).Seconds()))
+		}
+		set(mMetaMissing, float64(m.ChangesetsMissing))
+		set(mMetaPruned, float64(m.PrunedRows))
+	} else {
+		mMetaLag.DeletePartialMatch(l)
+		mMetaMissing.DeletePartialMatch(l)
+		mMetaPruned.DeletePartialMatch(l)
+	}
 	if c := apimeta.FindStatusCondition(st.Conditions, v1.ConditionReimportHeadroom); c != nil {
 		set(mHeadroom, b(c.Status == metav1.ConditionTrue))
 	}

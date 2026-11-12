@@ -51,6 +51,41 @@ type Result struct {
 // (no filters), so a non-match or a match is certain.
 type TagMatcher func(tags map[string]string) bool
 
+// SingleIDSpace is the mapping's use_single_id_space (how imposm numbers
+// osm_id: see the metadata join function).
+func (r *Result) SingleIDSpace() bool {
+	b, _ := r.doc["use_single_id_space"].(bool)
+	return b
+}
+
+// KeyColumns names a table's id column (type id) and geometry column (type
+// geometry or validated_geometry); a generalized table has its source's.
+// Empty when the table has none.
+func (r *Result) KeyColumns(table string) (id, geometry string) {
+	for range 16 { // generalized tables chain; a loop fails validation
+		if g := asMap(asMap(r.doc["generalized_tables"])[table]); g != nil {
+			table, _ = g["source"].(string)
+			continue
+		}
+		for _, c := range asList(asMap(asMap(r.doc["tables"])[table])["columns"]) {
+			col := asMap(c)
+			name, _ := col["name"].(string)
+			switch col["type"] {
+			case "id":
+				if id == "" {
+					id = name
+				}
+			case "geometry", "validated_geometry":
+				if geometry == "" {
+					geometry = name
+				}
+			}
+		}
+		return id, geometry
+	}
+	return "", ""
+}
+
 // PointMatchers returns matchers for point tables without filters.
 func (r *Result) PointMatchers() map[string]TagMatcher {
 	out := map[string]TagMatcher{}

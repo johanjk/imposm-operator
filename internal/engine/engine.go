@@ -36,6 +36,7 @@ import (
 	"github.com/johanjk/imposm-operator/internal/limitto"
 	"github.com/johanjk/imposm-operator/internal/mapping"
 	"github.com/johanjk/imposm-operator/internal/osm"
+	"github.com/johanjk/imposm-operator/internal/osmmeta"
 	"github.com/johanjk/imposm-operator/internal/pgconf"
 	"github.com/johanjk/imposm-operator/internal/spec"
 	"github.com/johanjk/imposm-operator/internal/state"
@@ -102,8 +103,18 @@ type Engine struct {
 	Progress *ProgressReporter
 	// DiskFree reports the free bytes of the data volume (default: statfs).
 	DiskFree func(dir string) (int64, error)
-	Log      *slog.Logger
-	Now      func() time.Time
+	// Metadata keeps the metadata tables (nil: spec.metadata unset);
+	// MetadataElements: element metadata is on; Changesets: the changeset
+	// replication (nil: off).
+	Metadata         osmmeta.Store
+	MetadataElements bool
+	Changesets       *osmmeta.ChangesetSource
+	// DropMetadataViews drops views a metadata store made for this sync
+	// while metadata is off (Metadata nil): turned off, they would follow
+	// production into the backup and fail the next deploy.
+	DropMetadataViews func(context.Context) error
+	Log               *slog.Logger
+	Now               func() time.Time
 }
 
 // Result is the machine-readable outcome of a run (written to the
@@ -166,6 +177,9 @@ type Result struct {
 	Diffs []DiffRange `json:"diffs,omitempty"`
 	// Events are one-time things this run did (at most maxListed).
 	Events []Event `json:"events,omitempty"`
+	// Metadata reports the metadata tables (nil: off, or the run did not
+	// get to them).
+	Metadata *MetadataResult `json:"metadata,omitempty"`
 }
 
 // DiffRange is a run of applied diffs: sequences From to To, the changes
@@ -303,6 +317,9 @@ type run struct {
 	// keepFrom: diffs from this sequence on are still needed by another
 	// import than the one applying diffs (shared diffs directory).
 	keepFrom int64
+	// metaKeep: diffs from this sequence on are still needed by the element
+	// metadata (0: none).
+	metaKeep int64
 	// prodNote explains production's state during a re-import (prodPaused
 	// its Pause* code); notes are further sentences for the run's message.
 	prodNote   string
@@ -490,6 +507,7 @@ func (r *run) do() error {
 		return err
 	}
 	r.loaded = true
+	r.metaKeep = r.metaKeepFrom()
 	if err := r.claim(); err != nil {
 		var cc *state.ClaimConflict
 		if errors.As(err, &cc) {
@@ -544,6 +562,17 @@ func (r *run) do() error {
 	if err := r.syncProduction(imp); err != nil {
 		return err
 	}
+	err = r.runPipeline(imp, w)
+	// the metadata follows production, whatever happened to a new import
+	if r.ctx.Err() == nil {
+		r.syncMetadata()
+	}
+	return err
+}
+
+// runPipeline advances imp (and production, when imp is deployed).
+func (r *run) runPipeline(imp *state.Import, w *workspace) error {
+	var err error
 
 	// Run the pipeline; a cache that no longer matches restarts it once. A
 	// second mismatch in the same run is an error (the new import is left
@@ -1137,6 +1166,10 @@ func (r *run) deploy(w *workspace) (backupKept bool, err error) {
 		return false, err
 	}
 	r.Progress.Step(StepDeploy, "")
+	if err := r.viewsDown(); err != nil {
+		return false, err
+	}
+	defer r.viewsUp(w)
 	if err := r.imposmImport(w, imposm.StepDeploy, ""); err != nil {
 		return false, err
 	}
@@ -1194,6 +1227,10 @@ func (r *run) revert(imp *state.Import) error {
 		return fmt.Errorf("revert-deploy: import %d: %w", imp.ID, err)
 	}
 	if err := r.flushAllTiles("revert deploy"); err != nil {
+		return err
+	}
+	// none while reverted: production holds the previous import's tables
+	if err := r.viewsDown(); err != nil {
 		return err
 	}
 	if err := r.imposmImport(w, imposm.StepRevert, ""); err != nil {
@@ -1498,10 +1535,16 @@ func (r *run) fetchDiffs(from, to int64) ([]string, osm.State, error) {
 }
 
 // cleanupDiffs deletes downloaded diffs up to upTo, keeping those another
-// import still needs (keepFrom).
+// import still needs (keepFrom) and the next ones the element metadata
+// applies (metaKeep): at most one run's worth (maxDiffsPerRun), so metadata
+// that keeps failing cannot fill the volume; it fetches the others again.
 func (r *run) cleanupDiffs(upTo int64) {
 	if r.keepFrom > 0 {
 		upTo = min(upTo, r.keepFrom-1)
+	}
+	metaWindow := int64(max(r.Spec.MaxDiffsPerRun, 1))
+	keep := func(seq int64) bool {
+		return r.metaKeep > 0 && seq >= r.metaKeep && seq < r.metaKeep+metaWindow
 	}
 	root := r.path("diffs")
 	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -1509,7 +1552,7 @@ func (r *run) cleanupDiffs(upTo int64) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
-		if seq, err := osm.ParseSeqPath(filepath.ToSlash(rel)); err == nil && seq <= upTo {
+		if seq, err := osm.ParseSeqPath(filepath.ToSlash(rel)); err == nil && seq <= upTo && !keep(seq) {
 			os.Remove(p)
 		}
 		return nil

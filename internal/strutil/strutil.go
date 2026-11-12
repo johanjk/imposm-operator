@@ -2,7 +2,11 @@
 // controller.
 package strutil
 
-import "unicode/utf8"
+import (
+	"regexp"
+	"strings"
+	"unicode/utf8"
+)
 
 // Truncate shortens s to at most n bytes, ending in "…" when cut, on a
 // UTF-8 boundary (a cut never splits a character).
@@ -20,3 +24,13 @@ func Truncate(s string, n int) string {
 	}
 	return s[:n] + ell
 }
+
+var identRe = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
+// IsIdent reports whether s is a plain PostgreSQL identifier (lower case,
+// at most 63 bytes): safe unquoted and the same quoted.
+func IsIdent(s string) bool { return identRe.MatchString(s) }
+
+// IsUserSchema reports whether s is a plain identifier outside PostgreSQL's
+// reserved pg_ names.
+func IsUserSchema(s string) bool { return IsIdent(s) && !strings.HasPrefix(s, "pg_") }

@@ -39,7 +39,7 @@ tables:
 		t.Fatal(err)
 	}
 	zw := gzip.NewWriter(f)
-	fmt.Fprint(zw, `<osmChange version="0.6"><create><node id="42" version="1" lat="43.7" lon="7.4"><tag k="place" v="city"/></node></create></osmChange>`)
+	fmt.Fprint(zw, `<osmChange version="0.6"><create><node id="42" version="1" timestamp="2024-01-01T00:00:00Z" lat="43.7" lon="7.4"><tag k="place" v="city"/></node></create></osmChange>`)
 	zw.Close()
 	f.Close()
 	return m, []string{p}

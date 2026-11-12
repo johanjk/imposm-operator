@@ -18,6 +18,7 @@ import (
 	"github.com/johanjk/imposm-operator/internal/expire"
 	"github.com/johanjk/imposm-operator/internal/fixtureserver"
 	"github.com/johanjk/imposm-operator/internal/mapping"
+	"github.com/johanjk/imposm-operator/internal/osmmeta"
 	"github.com/johanjk/imposm-operator/internal/pgconf"
 	"github.com/johanjk/imposm-operator/internal/spec"
 	"github.com/johanjk/imposm-operator/internal/state"
@@ -50,6 +51,12 @@ type Harness struct {
 	// DiskFree overrides the engine's free-space check.
 	DiskFree func(dir string) (int64, error)
 	DL       *download.Client
+	// Metadata, MetadataElements, Changesets and DropMetadataViews are
+	// passed to the engine.
+	Metadata          osmmeta.Store
+	MetadataElements  bool
+	Changesets        *osmmeta.ChangesetSource
+	DropMetadataViews func(context.Context) error
 }
 
 // HarnessOptions customise NewHarness.
@@ -153,6 +160,7 @@ func (h *Harness) Engine() *engine.Engine {
 		Name: h.Name, Spec: h.Spec, DataDir: h.DataDir, Mapping: h.Mapping, DB: h.DB,
 		Store: h.Store, Upstream: up, PBFURL: up.PBFURL, ReplicationURL: up.ReplicationURL,
 		Imposm: h.Imposm, Log: h.Log, LimitTo: h.LimitTo, DiskFree: h.DiskFree,
+		Metadata: h.Metadata, MetadataElements: h.MetadataElements, Changesets: h.Changesets, DropMetadataViews: h.DropMetadataViews,
 	}
 	if f, ok := h.Imposm.(*FakeImposm); ok && !h.NoProbe {
 		e.Probe = f

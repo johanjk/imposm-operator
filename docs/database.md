@@ -85,3 +85,36 @@ With `USAGE` only on the production schema, readers see the deployed data,
 not an import in progress or the backup. The schema must exist for the
 `GRANT USAGE`: create it for the sync user first (`CREATE SCHEMA osm
 AUTHORIZATION osm`) or grant after the first deploy.
+
+## Metadata tables
+
+With `spec.metadata` the sync user also creates `metadata.schema`
+(by default the production schema with `_history`, e.g. `osm_history`; one
+per sync) and owns the tables in it (see
+[design-osm-metadata.md](design-osm-metadata.md)): `CREATE` on the database
+covers it, or create the schema for the user beforehand. The schema must
+belong to the sync user (or a role it is a member of): one owned by another
+user is refused, as its owner could plant a trigger that runs with the sync
+user's rights.
+
+```sql
+CREATE SCHEMA osm_history AUTHORIZATION osm;
+```
+
+Readers:
+
+```sql
+GRANT USAGE ON SCHEMA osm_history TO osm_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE osm IN SCHEMA osm_history GRANT SELECT ON TABLES TO osm_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA osm_history TO osm_reader;
+```
+
+Unlike imposm's tables, these are created in their own schema and stay
+there, so `IN SCHEMA` default privileges work (`ON TABLES` covers views). A
+snapshot load replaces `element_meta` with a new table, and a deploy
+recreates the views of the production tables; both get the default
+privileges. The views run with the sync user's rights, so a reader with
+`SELECT` on them reads the production rows without access to the
+production schema. The join function `element` is executable by everyone
+(PostgreSQL's default for functions).
+

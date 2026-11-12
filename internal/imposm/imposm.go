@@ -14,13 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/johanjk/imposm-operator/internal/fsutil"
+	"github.com/johanjk/imposm-operator/internal/strutil"
 )
 
 // Config is the static part of imposm's -config JSON. It never holds a password.
@@ -41,8 +41,6 @@ type Config struct {
 type Schemas struct {
 	Import, Production, Backup string
 }
-
-var identRe = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 // Validate checks every field that is placed on the command line or in the
 // config file.
@@ -75,7 +73,7 @@ func (c Config) Validate() error {
 // Validate checks schema names.
 func (s Schemas) Validate() error {
 	for name, v := range map[string]string{"import": s.Import, "production": s.Production, "backup": s.Backup} {
-		if !identRe.MatchString(v) {
+		if !strutil.IsIdent(v) {
 			return fmt.Errorf("imposm: schema %s %q is not a valid identifier", name, v)
 		}
 	}
@@ -150,7 +148,7 @@ func DiffArgs(configPath, target string, files []string) ([]string, error) {
 	if err := absPath(configPath); err != nil {
 		return nil, fmt.Errorf("config path: %w", err)
 	}
-	if !identRe.MatchString(target) {
+	if !strutil.IsIdent(target) {
 		return nil, fmt.Errorf("imposm: schema %q is not a valid identifier", target)
 	}
 	if len(files) == 0 {

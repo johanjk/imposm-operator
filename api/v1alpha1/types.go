@@ -61,7 +61,120 @@ type ImposmSyncSpec struct {
 
 	// +optional
 	Runner RunnerSpec `json:"runner,omitempty"`
+
+	// Metadata keeps OSM element metadata (version, timestamp, changeset),
+	// optionally their history and the changesets, in tables next to
+	// imposm's. Versions and timestamps work with any source; changesets
+	// need one whose snapshot and diffs carry changeset ids (the public
+	// Geofabrik downloads do not). Changing it never re-imports imposm's
+	// tables.
+	// +optional
+	Metadata *MetadataSpec `json:"metadata,omitempty"`
 }
+
+// MetadataSpec: see ImposmSyncSpec.Metadata and docs/design-osm-metadata.md.
+type MetadataSpec struct {
+	// Elements whose metadata is kept: none, tagged (every way and relation,
+	// and nodes with tags), or all (also untagged nodes, about ten times the
+	// rows).
+	// +kubebuilder:validation:Enum=none;tagged;all
+	// +kubebuilder:default=tagged
+	// +optional
+	Elements string `json:"elements,omitempty"`
+	// Schema of the metadata tables, one per sync (the first sync to use
+	// it claims it; another is refused). Must differ from database.schemas.
+	// Default: the production schema with "_history" (osm_history for osm).
+	// +optional
+	Schema string `json:"schema,omitempty"`
+	// +optional
+	History HistorySpec `json:"history,omitempty"`
+	// +optional
+	Changesets ChangesetsSpec `json:"changesets,omitempty"`
+}
+
+// HistorySpec keeps every version of an element seen since the sync started.
+type HistorySpec struct {
+	// Mode: none; versions (metadata of every version); full (also each
+	// version's tags, node position, way nodes and relation members: an
+	// audit trail of what changed).
+	// +kubebuilder:validation:Enum=none;versions;full
+	// +kubebuilder:default=none
+	// +optional
+	Mode string `json:"mode,omitempty"`
+	// +optional
+	Retention HistoryRetention `json:"retention,omitempty"`
+	// IndexTags adds a GIN index on the tags of the history (mode full), for
+	// searching every edit of a tag.
+	// +optional
+	IndexTags bool `json:"indexTags,omitempty"`
+}
+
+// HistoryRetention: when history rows are deleted or reduced. Durations are
+// "<n>d" or "<n>h". Unset: kept forever. An element's newest version is
+// never deleted while the element exists.
+type HistoryRetention struct {
+	// MaxAge deletes versions replaced longer ago than this.
+	// +kubebuilder:validation:Pattern=`^[0-9]+[dh]$`
+	// +optional
+	MaxAge string `json:"maxAge,omitempty"`
+	// MaxVersions keeps only the newest N versions per element (0: all).
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxVersions int32 `json:"maxVersions,omitempty"`
+	// Deleted removes the whole history of elements deleted in OSM longer
+	// ago than this.
+	// +kubebuilder:validation:Pattern=`^[0-9]+[dh]$`
+	// +optional
+	Deleted string `json:"deleted,omitempty"`
+	// Content (mode full) clears the content columns of versions replaced
+	// longer ago than this; their metadata rows stay.
+	// +kubebuilder:validation:Pattern=`^[0-9]+[dh]$`
+	// +optional
+	Content string `json:"content,omitempty"`
+}
+
+// ChangesetsSpec keeps the changesets (comment, tags, bounding box) that
+// touch the sync's area, from OpenStreetMap's changeset replication.
+type ChangesetsSpec struct {
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+	// ReplicationURL is the changeset replication directory (the one holding
+	// state.yaml).
+	// +kubebuilder:default="https://planet.openstreetmap.org/replication/changesets/"
+	// +kubebuilder:validation:Pattern=`^https?://`
+	// +optional
+	ReplicationURL string `json:"replicationURL,omitempty"`
+	// BBox "minLon,minLat,maxLon,maxLat": changesets whose bounding box
+	// intersects it are kept. Default: the bounding box in the snapshot's
+	// header.
+	// +optional
+	BBox string `json:"bbox,omitempty"`
+	// Retention deletes changesets closed longer ago than this ("<n>d" or
+	// "<n>h") that no kept metadata or history row refers to. Unset: kept.
+	// +kubebuilder:validation:Pattern=`^[0-9]+[dh]$`
+	// +optional
+	Retention string `json:"retention,omitempty"`
+	// IndexText adds a full-text index on changeset comments.
+	// +optional
+	IndexText bool `json:"indexText,omitempty"`
+	// MaxFilesPerRun bounds the replication files one run fetches (one per
+	// minute upstream); a backlog is caught up over several runs.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100000
+	// +kubebuilder:default=1500
+	// +optional
+	MaxFilesPerRun int32 `json:"maxFilesPerRun,omitempty"`
+}
+
+// Metadata settings.
+const (
+	MetadataElementsNone   = "none"
+	MetadataElementsTagged = "tagged"
+	MetadataElementsAll    = "all"
+	HistoryModeNone        = "none"
+	HistoryModeVersions    = "versions"
+	HistoryModeFull        = "full"
+)
 
 // SourceSpec is the OSM upstream.
 type SourceSpec struct {
@@ -464,6 +577,13 @@ const (
 	// mapping that matches nothing in the region, or a filter on a tag the
 	// data lacks).
 	ConditionEmptyTables = "EmptyTables"
+	// ConditionMetadataValid: the metadata settings can be served by the
+	// source (False: e.g. changesets are on but the snapshot or diffs carry
+	// no changeset ids).
+	ConditionMetadataValid = "MetadataValid"
+	// ConditionMetadataCurrent: the metadata tables follow production (False
+	// while they are built, behind, or failing; see status.metadata).
+	ConditionMetadataCurrent = "MetadataCurrent"
 )
 
 // DiffRange is a run of applied diffs: sequences from to to, with the
@@ -541,6 +661,46 @@ type StorageStatus struct {
 	// production syncing needs about 1.2 times that free (ReimportHeadroom).
 	// +optional
 	CacheBytes int64 `json:"cacheBytes,omitempty"`
+}
+
+// MetadataStatus describes the metadata tables.
+type MetadataStatus struct {
+	// Sequence and Timestamp the element metadata is at (production's once
+	// it caught up).
+	// +optional
+	Sequence int64 `json:"sequence,omitempty"`
+	// +optional
+	Timestamp *metav1.Time `json:"timestamp,omitempty"`
+	// Elements is the number of elements with metadata.
+	// +optional
+	Elements int64 `json:"elements,omitempty"`
+	// HistoryRows and HistoryOldest (the oldest kept version's time).
+	// +optional
+	HistoryRows int64 `json:"historyRows,omitempty"`
+	// +optional
+	HistoryOldest *metav1.Time `json:"historyOldest,omitempty"`
+	// ChangesetSequence and ChangesetTimestamp of the changeset replication.
+	// +optional
+	ChangesetSequence int64 `json:"changesetSequence,omitempty"`
+	// +optional
+	ChangesetTimestamp *metav1.Time `json:"changesetTimestamp,omitempty"`
+	// Changesets kept.
+	// +optional
+	Changesets int64 `json:"changesets,omitempty"`
+	// ChangesetsMissing: changesets referenced by element metadata from
+	// diffs, older than 48 hours, but not in the changeset table (a gap in
+	// the changeset replication, or changesets outside the bbox).
+	// +optional
+	ChangesetsMissing int64 `json:"changesetsMissing,omitempty"`
+	// LastPruned is when retention last ran; PrunedRows what it deleted or
+	// cleared then.
+	// +optional
+	LastPruned *metav1.Time `json:"lastPruned,omitempty"`
+	// +optional
+	PrunedRows int64 `json:"prunedRows,omitempty"`
+	// Message: why the metadata is not current, when it is not.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // ProductionStatus is the import serving production.
@@ -638,6 +798,9 @@ type ImposmSyncStatus struct {
 	EmptyTables []string `json:"emptyTables,omitempty"`
 	// +optional
 	EmptyTableCount int32 `json:"emptyTableCount,omitempty"`
+	// Metadata reports the metadata tables (spec.metadata).
+	// +optional
+	Metadata *MetadataStatus `json:"metadata,omitempty"`
 	// ConsecutiveFailures of finished runs (0 after a success).
 	// +optional
 	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`

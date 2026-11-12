@@ -555,6 +555,120 @@ spec:
                   maximum: 100000
                   minimum: 1
                   type: integer
+                metadata:
+                  description: |-
+                    Metadata keeps OSM element metadata (version, timestamp, changeset),
+                    optionally their history and the changesets, in tables next to
+                    imposm's. Versions and timestamps work with any source; changesets
+                    need one whose snapshot and diffs carry changeset ids (the public
+                    Geofabrik downloads do not). Changing it never re-imports imposm's
+                    tables.
+                  properties:
+                    changesets:
+                      description: |-
+                        ChangesetsSpec keeps the changesets (comment, tags, bounding box) that
+                        touch the sync's area, from OpenStreetMap's changeset replication.
+                      properties:
+                        bbox:
+                          description: |-
+                            BBox "minLon,minLat,maxLon,maxLat": changesets whose bounding box
+                            intersects it are kept. Default: the bounding box in the snapshot's
+                            header.
+                          type: string
+                        enabled:
+                          type: boolean
+                        indexText:
+                          description: IndexText adds a full-text index on changeset comments.
+                          type: boolean
+                        maxFilesPerRun:
+                          default: 1500
+                          description: |-
+                            MaxFilesPerRun bounds the replication files one run fetches (one per
+                            minute upstream); a backlog is caught up over several runs.
+                          format: int32
+                          maximum: 100000
+                          minimum: 1
+                          type: integer
+                        replicationURL:
+                          default: https://planet.openstreetmap.org/replication/changesets/
+                          description: |-
+                            ReplicationURL is the changeset replication directory (the one holding
+                            state.yaml).
+                          pattern: ^https?://
+                          type: string
+                        retention:
+                          description: |-
+                            Retention deletes changesets closed longer ago than this ("<n>d" or
+                            "<n>h") that no kept metadata or history row refers to. Unset: kept.
+                          pattern: ^[0-9]+[dh]$
+                          type: string
+                      type: object
+                    elements:
+                      default: tagged
+                      description: |-
+                        Elements whose metadata is kept: none, tagged (every way and relation,
+                        and nodes with tags), or all (also untagged nodes, about ten times the
+                        rows).
+                      enum:
+                        - none
+                        - tagged
+                        - all
+                      type: string
+                    history:
+                      description: HistorySpec keeps every version of an element seen since the sync started.
+                      properties:
+                        indexTags:
+                          description: |-
+                            IndexTags adds a GIN index on the tags of the history (mode full), for
+                            searching every edit of a tag.
+                          type: boolean
+                        mode:
+                          default: none
+                          description: |-
+                            Mode: none; versions (metadata of every version); full (also each
+                            version's tags, node position, way nodes and relation members: an
+                            audit trail of what changed).
+                          enum:
+                            - none
+                            - versions
+                            - full
+                          type: string
+                        retention:
+                          description: |-
+                            HistoryRetention: when history rows are deleted or reduced. Durations are
+                            "<n>d" or "<n>h". Unset: kept forever. An element's newest version is
+                            never deleted while the element exists.
+                          properties:
+                            content:
+                              description: |-
+                                Content (mode full) clears the content columns of versions replaced
+                                longer ago than this; their metadata rows stay.
+                              pattern: ^[0-9]+[dh]$
+                              type: string
+                            deleted:
+                              description: |-
+                                Deleted removes the whole history of elements deleted in OSM longer
+                                ago than this.
+                              pattern: ^[0-9]+[dh]$
+                              type: string
+                            maxAge:
+                              description: MaxAge deletes versions replaced longer ago than this.
+                              pattern: ^[0-9]+[dh]$
+                              type: string
+                            maxVersions:
+                              description: 'MaxVersions keeps only the newest N versions per element (0: all).'
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          type: object
+                      type: object
+                    schema:
+                      description: |-
+                        Schema of the metadata tables, one per sync (the first sync to use
+                        it claims it; another is refused). Must differ from database.schemas.
+                        Default: the production schema with "_history" (osm_history for osm).
+                      type: string
+                  type: object
                 runner:
                   description: |-
                     RunnerSpec configures the sync Job pods.
@@ -1123,6 +1237,60 @@ spec:
                   type: string
                 message:
                   type: string
+                metadata:
+                  description: Metadata reports the metadata tables (spec.metadata).
+                  properties:
+                    changesetSequence:
+                      description: ChangesetSequence and ChangesetTimestamp of the changeset replication.
+                      format: int64
+                      type: integer
+                    changesetTimestamp:
+                      format: date-time
+                      type: string
+                    changesets:
+                      description: Changesets kept.
+                      format: int64
+                      type: integer
+                    changesetsMissing:
+                      description: |-
+                        ChangesetsMissing: changesets referenced by element metadata from
+                        diffs, older than 48 hours, but not in the changeset table (a gap in
+                        the changeset replication, or changesets outside the bbox).
+                      format: int64
+                      type: integer
+                    elements:
+                      description: Elements is the number of elements with metadata.
+                      format: int64
+                      type: integer
+                    historyOldest:
+                      format: date-time
+                      type: string
+                    historyRows:
+                      description: HistoryRows and HistoryOldest (the oldest kept version's time).
+                      format: int64
+                      type: integer
+                    lastPruned:
+                      description: |-
+                        LastPruned is when retention last ran; PrunedRows what it deleted or
+                        cleared then.
+                      format: date-time
+                      type: string
+                    message:
+                      description: 'Message: why the metadata is not current, when it is not.'
+                      type: string
+                    prunedRows:
+                      format: int64
+                      type: integer
+                    sequence:
+                      description: |-
+                        Sequence and Timestamp the element metadata is at (production's once
+                        it caught up).
+                      format: int64
+                      type: integer
+                    timestamp:
+                      format: date-time
+                      type: string
+                  type: object
                 nextRunTime:
                   description: NextRunTime from the schedule (unset while suspended).
                   format: date-time

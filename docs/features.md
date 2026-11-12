@@ -35,6 +35,14 @@
   polygons built from multipolygon relations, see
   [`containers/patches/`](../containers/patches/) and
   [imposm-issues.md](imposm-issues.md).
+- OSM metadata (`spec.metadata`): each element's version, timestamp and
+  changeset, optionally every version (a full audit trail of what changed)
+  and the changesets themselves, in a schema of their own (`osm_history` for production in `osm`)
+  joinable to imposm's rows (and a view per table with them joined, e.g.
+  `osm_history.osm_roads`), with retention. Versions and timestamps work
+  with any source; changesets need one with changeset ids (the public
+  Geofabrik downloads have none). See
+  [design-osm-metadata.md](design-osm-metadata.md).
 - Re-imports without growing lag: while a new import is built (a mapping,
   SRID, prefix, limitTo or schema change, or the `reimport` action),
   production keeps receiving diffs with its own frozen configuration and

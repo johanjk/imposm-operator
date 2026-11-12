@@ -22,7 +22,8 @@ type EgressPorts struct {
 	Database int32
 	// Redis is the expire-tile Redis port; 0 without a Redis sink.
 	Redis int32
-	// Upstream are the mirror ports (baseURL, replicationBaseURL), always with
+	// Upstream are the mirror ports (baseURL, replicationBaseURL, the
+	// changeset replication), always with
 	// 80 and 443 for redirects (planet.openstreetmap.org redirects to S3).
 	Upstream []int32
 }
@@ -42,7 +43,11 @@ func Egress(s *v1.ImposmSyncSpec) EgressPorts {
 		}
 	}
 	e.Upstream = []int32{80, 443}
-	for _, raw := range []string{s.Source.BaseURL, s.Source.ReplicationBaseURL} {
+	urls := []string{s.Source.BaseURL, s.Source.ReplicationBaseURL}
+	if m := s.Metadata; m != nil && m.Changesets.Enabled {
+		urls = append(urls, m.Changesets.ReplicationURL)
+	}
+	for _, raw := range urls {
 		if p, ok := urlPort(raw); ok && !slices.Contains(e.Upstream, p) {
 			e.Upstream = append(e.Upstream, p)
 		}

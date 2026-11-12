@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -551,27 +552,44 @@ func TestManualDeployAndRevert(t *testing.T) {
 	}
 }
 
-// TestHeaderlessSnapshot serves a snapshot without replication header fields
-// (only the timestamp) so the engine must search the sequence by timestamp.
-func TestHeaderlessSnapshot(t *testing.T) {
+// TestSnapshotSequence: the snapshot's sequence is found in the configured
+// replication stream whatever its header says. Without header sequence, or
+// with one from another stream (the snapshot from one server, the diffs from
+// another), the engine searches the configured stream by the header's
+// timestamp.
+func TestSnapshotSequence(t *testing.T) {
 	fx := testutil.Monaco(t)
-	dir := t.TempDir()
-	copyTree(t, fx.Dir, dir)
-	src := must(os.ReadFile(filepath.Join(fx.Dir, fx.Snapshot)))
-	var out bytes.Buffer
-	if err := osm.StripReplicationHeader(bytes.NewReader(src), &out, true); err != nil {
-		t.Fatal(err)
-	}
-	pbf := filepath.Join(dir, fx.Snapshot)
-	os.WriteFile(pbf, out.Bytes(), 0o644)
-	sum, _ := download.FileMD5(pbf)
-	os.WriteFile(pbf+".md5", []byte(sum+"  "+fx.Snapshot+"\n"), 0o644)
+	for name, rewrite := range map[string]func(r io.Reader, w io.Writer) error{
+		"no sequence": func(r io.Reader, w io.Writer) error { return osm.StripReplicationHeader(r, w, true) },
+		// a sequence the configured stream also has, days later
+		"sequence of another stream": func(r io.Reader, w io.Writer) error {
+			return osm.SetReplicationHeader(r, w, fx.SnapshotSequence+4, "https://planet.example/replication/day")
+		},
+		// a sequence the configured stream does not have
+		"sequence beyond the stream": func(r io.Reader, w io.Writer) error {
+			return osm.SetReplicationHeader(r, w, 6_000_000, "https://planet.example/replication/minute")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			copyTree(t, fx.Dir, dir)
+			src := must(os.ReadFile(filepath.Join(fx.Dir, fx.Snapshot)))
+			var out bytes.Buffer
+			if err := rewrite(bytes.NewReader(src), &out); err != nil {
+				t.Fatal(err)
+			}
+			pbf := filepath.Join(dir, fx.Snapshot)
+			os.WriteFile(pbf, out.Bytes(), 0o644)
+			sum, _ := download.FileMD5(pbf)
+			os.WriteFile(pbf+".md5", []byte(sum+"  "+fx.Snapshot+"\n"), 0o644)
 
-	h := testutil.NewHarnessDir(t, dir, testutil.HarnessOptions{Head: fx.SnapshotSequence + 2})
-	r := h.Run(engine.ActionSync)
-	mustOK(t, r)
-	if r.ImportSequence != fx.SnapshotSequence || r.CurrentSequence != fx.SnapshotSequence+2 {
-		t.Fatalf("got %+v", r)
+			h := testutil.NewHarnessDir(t, dir, testutil.HarnessOptions{Head: fx.SnapshotSequence + 6})
+			r := h.Run(engine.ActionSync)
+			mustOK(t, r)
+			if r.ImportSequence != fx.SnapshotSequence || r.CurrentSequence != fx.SnapshotSequence+6 {
+				t.Fatalf("got %+v", r)
+			}
+		})
 	}
 }
 
