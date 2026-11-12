@@ -30,8 +30,11 @@
   condition's message. After each run, production tables without rows are
   listed in `status.emptyTables` (condition `EmptyTables`). The runner's
   imposm adds a `jsonb_tags` column type (all tags, or those in
-  `args.include`, as a JSONB object; no hstore extension needed), see
-  [`containers/patches/`](../containers/patches/).
+  `args.include`, as a JSONB object; no hstore extension needed), registers
+  generalized tables with their SRID, and leaves `type=multipolygon` out of
+  polygons built from multipolygon relations, see
+  [`containers/patches/`](../containers/patches/) and
+  [imposm-issues.md](imposm-issues.md).
 - Re-imports without growing lag: while a new import is built (a mapping,
   SRID, prefix, limitTo or schema change, or the `reimport` action),
   production keeps receiving diffs with its own frozen configuration and

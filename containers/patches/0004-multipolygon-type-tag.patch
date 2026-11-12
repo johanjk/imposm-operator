@@ -1,0 +1,73 @@
+diff --git a/writer/relations.go b/writer/relations.go
+index 1d0317d..ac2bd39 100644
+--- a/writer/relations.go
++++ b/writer/relations.go
+@@ -190,6 +190,7 @@ func handleMultiPolygon(rw *RelationWriter, r *osm.Relation, geos *geosp.Geos) i
+ 		for _, g := range parts {
+ 			rel := osm.Relation(*r)
+ 			rel.ID = rw.relID(r.ID)
++			rel.Tags = polygonTags(r.Tags)
+ 			geom = geomp.Geometry{Geom: g, Wkb: geos.AsEwkbHex(g)}
+ 			err := rw.inserter.InsertPolygon(rel.Element, geom, matches)
+ 			if err != nil {
+@@ -202,6 +203,7 @@ func handleMultiPolygon(rw *RelationWriter, r *osm.Relation, geos *geosp.Geos) i
+ 	} else {
+ 		rel := osm.Relation(*r)
+ 		rel.ID = rw.relID(r.ID)
++		rel.Tags = polygonTags(r.Tags)
+ 		err := rw.inserter.InsertPolygon(rel.Element, geom, matches)
+ 		if err != nil {
+ 			if errl, ok := err.(ErrorLevel); !ok || errl.Level() > 0 {
+@@ -294,3 +296,21 @@ func handleRelationMembers(rw *RelationWriter, r *osm.Relation, geos *geosp.Geos
+ 	}
+ 	return insertSucceeded
+ }
++
++// polygonTags are the tags a multipolygon relation's polygon is inserted
++// with: without type=multipolygon, which only says how the relation's members
++// form the polygon and means nothing for the polygon itself (imposm3#182).
++// Other relation types (type=boundary, ...) keep their tag. The relation was
++// matched with all its tags; r.Tags is not changed.
++func polygonTags(tags osm.Tags) osm.Tags {
++	if tags["type"] != "multipolygon" {
++		return tags
++	}
++	out := make(osm.Tags, len(tags)-1)
++	for k, v := range tags {
++		if k != "type" {
++			out[k] = v
++		}
++	}
++	return out
++}
+diff --git a/writer/relations_test.go b/writer/relations_test.go
+new file mode 100644
+index 0000000..2d67842
+--- /dev/null
++++ b/writer/relations_test.go
+@@ -0,0 +1,25 @@
++package writer
++
++import (
++	"reflect"
++	"testing"
++
++	osm "github.com/omniscale/go-osm"
++)
++
++// imposm3#182: polygons from type=multipolygon relations do not carry the tag.
++func TestPolygonTags(t *testing.T) {
++	in := osm.Tags{"type": "multipolygon", "landuse": "railway"}
++	got := polygonTags(in)
++	if want := (osm.Tags{"landuse": "railway"}); !reflect.DeepEqual(got, want) {
++		t.Errorf("got %v, want %v", got, want)
++	}
++	if in["type"] != "multipolygon" {
++		t.Error("input tags changed")
++	}
++	for _, tags := range []osm.Tags{{"type": "boundary", "boundary": "administrative"}, {"landuse": "railway"}, {}} {
++		if got := polygonTags(tags); !reflect.DeepEqual(got, tags) {
++			t.Errorf("%v: got %v", tags, got)
++		}
++	}
++}

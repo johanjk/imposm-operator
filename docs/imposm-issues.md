@@ -1,7 +1,8 @@
 # Problems found by the tests
 
 The comparison against the reference rows (`reference.rows.json.gz`) and against a direct import of the
-target data found three **imposm** problems that affect any imposm deployment, and one in the operator itself:
+target data, and a Norway rail import, found five **imposm** problems that affect any imposm deployment, and one
+in the operator itself:
 
 1. **Chained generalized tables drift in diff mode (imposm v0.14.2).**
    `GeneralizedTableSpec.InsertSQL` read from the base table instead of the
@@ -38,7 +39,33 @@ target data found three **imposm** problems that affect any imposm deployment, a
    scale test found 16 extra rows. The runner build applies
    `containers/patches/0001-dedupe-generalized-update-ids.patch` (deduplicate
    the queued ids) until it is fixed upstream.
-4. **A completed download could wedge a sync.** If the runner was killed after
+4. **Generalized tables have no SRID (imposm master, unfixed,
+   [imposm3#309](https://github.com/omniscale/imposm3/issues/309)).**
+   imposm creates generalized tables with `CREATE TABLE … AS`, casting the
+   geometry to a plain `Geometry`, so `geometry_columns` lists them as
+   `GEOMETRY` with SRID 0 although every row has the source's SRID (seen in
+   the Norway rail import: `osm_tracks` is `LINESTRING, 3857`, `osm_tracks_gen0`
+   `GEOMETRY, 0`). Clients that take the SRID from `geometry_columns` (QGIS,
+   GeoServer, pg_tileserv) misplace or reject those tables. The runner build
+   applies `containers/patches/0003-generalized-tables-srid.patch`: the
+   geometry is cast to the source table's type and SRID (`geometry(LINESTRING,
+   3857)`; polygon tables `GEOMETRY`, for multipolygons).
+5. **Multipolygon relations keep `type=multipolygon` (imposm master, unfixed,
+   [imposm3#182](https://github.com/omniscale/imposm3/issues/182)).**
+   A polygon built from a multipolygon relation is inserted with all the
+   relation's tags, including `type=multipolygon`, which only says how the
+   members form the polygon. It ends up in `hstore_tags`/`jsonb_tags` columns
+   (167 rows in the Norway rail import) and cannot be excluded: `tags.exclude:
+   [type]` stops imposm from building multipolygons at all. The runner build
+   applies `containers/patches/0004-multipolygon-type-tag.patch`: the polygon
+   is inserted without `type=multipolygon` (matching still sees it; other
+   relation types such as `type=boundary` keep the tag).
+
+   Both patches change what an import writes, not the diffs' logic: a
+   database imported before them keeps SRID 0 generalized tables and
+   multipolygon type tags (until a diff rewrites the element). Run the
+   `reimport` action once after upgrading the runner.
+6. **A completed download could wedge a sync.** If the runner was killed after
    a download finished but before the file was renamed, resuming it returned
    HTTP 416, which was treated as permanent. A 416 on resume now means "the
    part file may be complete": it is verified (md5 / gzip / size) and used or

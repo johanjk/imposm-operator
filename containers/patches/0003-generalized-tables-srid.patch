@@ -1,0 +1,87 @@
+diff --git a/database/postgis/columns.go b/database/postgis/columns.go
+index 0ebe33b..8143fbe 100644
+--- a/database/postgis/columns.go
++++ b/database/postgis/columns.go
+@@ -2,6 +2,7 @@ package postgis
+ 
+ import (
+ 	"fmt"
++	"strings"
+ 
+ 	"github.com/omniscale/imposm3/log"
+ )
+@@ -44,11 +45,23 @@ func (t *geometryType) PrepareInsertSQL(i int, spec *TableSpec) string {
+ }
+ 
+ func (t *geometryType) GeneralizeSQL(colSpec *ColumnSpec, spec *GeneralizedTableSpec) string {
+-	return fmt.Sprintf(`ST_SimplifyPreserveTopology("%s", %f)::Geometry as "%s"`,
+-		colSpec.Name, spec.Tolerance, colSpec.Name,
++	return fmt.Sprintf(`ST_SimplifyPreserveTopology("%s", %f)::%s as "%s"`,
++		colSpec.Name, spec.Tolerance, generalizedGeometryType(spec), colSpec.Name,
+ 	)
+ }
+ 
++// generalizedGeometryType is the column type of a generalized table's
++// geometry: the source table's type and SRID (see addGeometryColumn), so the
++// CREATE TABLE AS of a generalized table registers it in geometry_columns
++// with its SRID instead of 0.
++func generalizedGeometryType(spec *GeneralizedTableSpec) string {
++	geomType := strings.ToUpper(spec.Source.GeometryType)
++	if geomType == "" || geomType == "POLYGON" {
++		geomType = "GEOMETRY" // for multipolygon support
++	}
++	return fmt.Sprintf("geometry(%s, %d)", geomType, spec.Source.Srid)
++}
++
+ type validatedGeometryType struct {
+ 	geometryType
+ }
+@@ -58,8 +71,8 @@ func (t *validatedGeometryType) GeneralizeSQL(colSpec *ColumnSpec, spec *General
+ 		// TODO return warning earlier
+ 		log.Printf("[warn] validated_geometry column returns polygon geometries for %s", spec.FullName)
+ 	}
+-	return fmt.Sprintf(`ST_MakeValid(ST_SimplifyPreserveTopology("%s", %f), 'method=structure')::Geometry as "%s"`,
+-		colSpec.Name, spec.Tolerance, colSpec.Name,
++	return fmt.Sprintf(`ST_MakeValid(ST_SimplifyPreserveTopology("%s", %f), 'method=structure')::%s as "%s"`,
++		colSpec.Name, spec.Tolerance, generalizedGeometryType(spec), colSpec.Name,
+ 	)
+ }
+ 
+diff --git a/database/postgis/columns_test.go b/database/postgis/columns_test.go
+new file mode 100644
+index 0000000..ad7d852
+--- /dev/null
++++ b/database/postgis/columns_test.go
+@@ -0,0 +1,32 @@
++package postgis
++
++import (
++	"strings"
++	"testing"
++)
++
++// imposm3#309: generalized tables get the source's geometry type and SRID.
++func TestGeneralizedGeometryType(t *testing.T) {
++	for _, tc := range []struct {
++		geomType string
++		srid     int
++		want     string
++	}{
++		{"linestring", 3857, "geometry(LINESTRING, 3857)"},
++		{"point", 4326, "geometry(POINT, 4326)"},
++		{"polygon", 3857, "geometry(GEOMETRY, 3857)"},
++		{"geometry", 3857, "geometry(GEOMETRY, 3857)"},
++		{"", 3857, "geometry(GEOMETRY, 3857)"},
++	} {
++		spec := &GeneralizedTableSpec{Tolerance: 50, Source: &TableSpec{GeometryType: tc.geomType, Srid: tc.srid}}
++		if got := generalizedGeometryType(spec); got != tc.want {
++			t.Errorf("%q/%d: got %q, want %q", tc.geomType, tc.srid, got, tc.want)
++		}
++		col := &ColumnSpec{Name: "geometry"}
++		for _, typ := range []ColumnType{pgTypes["geometry"], pgTypes["validated_geometry"]} {
++			if sql := typ.GeneralizeSQL(col, spec); !strings.HasSuffix(sql, "::"+tc.want+` as "geometry"`) {
++				t.Errorf("%s: %s", typ.Name(), sql)
++			}
++		}
++	}
++}
